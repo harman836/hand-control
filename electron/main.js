@@ -258,7 +258,9 @@ ipcMain.handle('hand:getState', (e) => (fromApp(e) ? stateMsg() : null));
 function stateMsg() {
   return {
     enabled, paused, mouseOk: !!mouse, mouseError, mouseBackend: backendName(),
-    win32Ok: !!win32, settingsOpen: live(settingsWin), glass: glassSupported(),
+    // "Open" means actually on screen: a minimized Settings window doesn't need the camera.
+    win32Ok: !!win32, settingsOpen: live(settingsWin) && settingsWin.isVisible() && !settingsWin.isMinimized(),
+    glass: glassSupported(),
   };
 }
 
@@ -324,6 +326,7 @@ function openSettings() {
   settingsWin.webContents.on('did-finish-load', sendState);
   settingsWin.webContents.on('render-process-gone', (_e, d) => console.error(`[settings] renderer gone: ${d.reason}`));
   settingsWin.on('closed', () => { settingsWin = null; sendState(); });
+  for (const ev of ['minimize', 'restore', 'show', 'hide']) settingsWin.on(ev, () => setTimeout(sendState, 0));
   sendState();
 }
 

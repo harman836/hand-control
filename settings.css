@@ -73,6 +73,7 @@ h1, h2, h3 { margin: 0; letter-spacing: -0.01em; }
 .b3 { background: radial-gradient(circle, #2fd0bd 0%, rgba(47, 208, 189, 0) 68%); left: 18vmax; bottom: -24vmax; animation-duration: 64s; animation-delay: -30s; }
 .b4 { background: radial-gradient(circle, #ff8aa6 0%, rgba(255, 138, 166, 0) 68%); right: -10vmax; bottom: -20vmax; animation-duration: 52s; animation-delay: -6s; }
 .b5 { background: radial-gradient(circle, #ffc56b 0%, rgba(255, 197, 107, 0) 66%); left: 30vmax; top: 10vmax; width: 34vmax; height: 34vmax; opacity: 0.5; animation-duration: 70s; animation-delay: -40s; }
+.idle .blob, .idle .rec.recording { animation-play-state: paused; }
 @keyframes drift {
   0%   { transform: translate3d(0, 0, 0) scale(1); }
   33%  { transform: translate3d(8vmax, 6vmax, 0) scale(1.08); }

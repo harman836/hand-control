@@ -693,14 +693,35 @@ const fingerList = (f) => f ? ['thumb', 'index', 'middle', 'ring', 'pinky'].filt
   if (!stage || !video) return;
   stage.style.aspectRatio = `${screen.width || 16} / ${screen.height || 9}`;
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
-  navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, facingMode: 'user' }, audio: false })
-    .then((stream) => {
-      video.srcObject = stream;
-      video.play().catch(() => {});
-      stage.classList.add('cam-on');
-      window.addEventListener('beforeunload', () => stream.getTracks().forEach((tr) => tr.stop()));
-    })
-    .catch((err) => console.warn('Live view camera unavailable:', err && err.name));
+  // Preview only: low resolution and frame rate, and released whenever the window is hidden/minimized.
+  let stream = null, opening = false;
+  const start = () => {
+    if (stream || opening || document.hidden) return;
+    opening = true;
+    navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 480 }, height: { ideal: 270 }, frameRate: { ideal: 20, max: 24 }, facingMode: 'user' }, audio: false })
+      .then((s) => {
+        opening = false;
+        if (document.hidden) { s.getTracks().forEach((tr) => tr.stop()); return; }
+        stream = s; video.srcObject = s; video.play().catch(() => {});
+        stage.classList.add('cam-on');
+      })
+      .catch((err) => { opening = false; console.warn('Live view camera unavailable:', err && err.name); });
+  };
+  const stopCam = () => {
+    if (stream) stream.getTracks().forEach((tr) => tr.stop());
+    stream = null; video.srcObject = null; stage.classList.remove('cam-on');
+  };
+  document.addEventListener('visibilitychange', () => (document.hidden ? stopCam() : start()));
+  window.addEventListener('beforeunload', stopCam);
+  start();
+})();
+
+// Pause the drifting backdrop (it forces every glass panel to re-blur each frame) unless the window is focused.
+(function idleBackdrop() {
+  const set = () => document.documentElement.classList.toggle('idle', document.hidden || !document.hasFocus());
+  window.addEventListener('focus', set); window.addEventListener('blur', set);
+  document.addEventListener('visibilitychange', set);
+  set();
 })();
 
 const BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],

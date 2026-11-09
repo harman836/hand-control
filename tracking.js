@@ -9,6 +9,13 @@ const PINCH_ON = 0.33, PINCH_OFF = 0.45; // normalized thumb-index distance thre
 const GESTURE_FRAMES = 3;                // frames a raw gesture must hold before it commits
 const LOST_MS = 300;                     // hand gone this long -> reset its filters
 
+// ---------- Power ----------
+// Hand landmarks are computed on a ~224px crop internally, so 640x360 capture loses nothing
+// but cuts camera decode and GPU upload cost ~4x versus 720p.
+const CAPTURE = { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 30, max: 30 } };
+const IDLE_AFTER_MS = 1500;              // no hand seen this long -> idle rate
+const IDLE_FPS = 6;                      // detections/s while no hand is in view (still notices a hand within ~0.2s)
+
 // ---------- One Euro filter (Casiez et al. 2012) ----------
 const alpha = (cutoff, dt) => 1 / (1 + 1 / (2 * Math.PI * cutoff) / dt);
 
@@ -162,31 +169,79 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus, tuning: i
   let tuning = initialTuning || DEFAULT_TUNING;
   const setTuning = (t) => { if (t && typeof t === 'object') tuning = t; };
 
+  // Power state: `active` false releases the camera entirely (LED off, ~0 CPU); maxFps caps detection rate.
+  let active = true, maxFps = 30, lastDetect = 0, lastHandAt = 0, idle = false, vfcId = 0;
+  const hasVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+  const schedule = () => {
+    if (!running || !active) return;
+    if (hasVFC) vfcId = videoEl.requestVideoFrameCallback(() => frame());
+    else rafId = requestAnimationFrame(frame);
+  };
+  const unschedule = () => {
+    cancelAnimationFrame(rafId);
+    if (hasVFC && vfcId) { try { videoEl.cancelVideoFrameCallback(vfcId); } catch (e) { /* ignore */ } }
+    vfcId = 0;
+  };
+  const releaseCamera = () => {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    stream = null; videoEl.srcObject = null;
+  };
+  async function openCamera() {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { ...CAPTURE, facingMode: 'user' } });
+    videoEl.srcObject = stream;
+    videoEl.muted = true; videoEl.playsInline = true;
+    await videoEl.play();
+  }
+  // Ask the webcam itself to slow down while idle (not all cameras honour it; harmless if ignored).
+  const setCameraRate = (fps) => {
+    const tr = stream && stream.getVideoTracks()[0];
+    if (tr && tr.applyConstraints) tr.applyConstraints({ frameRate: { ideal: fps, max: 30 } }).catch(() => {});
+  };
+
   const stop = () => {
     running = false;
-    cancelAnimationFrame(rafId);
-    if (stream) stream.getTracks().forEach((t) => t.stop());
-    videoEl.srcObject = null;
+    unschedule();
+    releaseCamera();
     if (landmarker) { try { landmarker.close(); } catch (e) { /* ignore */ } landmarker = null; }
   };
+
+  let resuming = null;
+  async function setActive(on) {
+    on = !!on;
+    if (!running || on === active) return;
+    active = on;
+    if (!on) { unschedule(); releaseCamera(); states.clear(); status('sleeping'); return; }
+    if (resuming) return resuming;
+    resuming = (async () => {
+      try {
+        status('camera');
+        await openCamera();
+        if (!active) { releaseCamera(); return; } // switched off again while opening
+        lastVideoTime = -1; lastHandAt = performance.now(); idle = false;
+        status(landmarker ? 'ready' : 'loading');
+        schedule();
+      } catch (err) {
+        status('error', (err && err.message) || String(err));
+      } finally { resuming = null; }
+    })();
+    return resuming;
+  }
+  const setMaxFps = (n) => { if (Number.isFinite(n) && n > 0) maxFps = Math.min(30, n); };
 
   try {
     // 1. Camera
     status('camera');
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, facingMode: 'user' } });
+      await openCamera();
     } catch (err) {
       if (err && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError' || err.name === 'SecurityError')) {
         status('denied');
       } else {
         status('error', (err && err.message) || String(err));
       }
-      return { stop };
+      return { stop, setTuning, setActive, setMaxFps };
     }
-    if (!running) { stop(); return { stop }; }
-    videoEl.srcObject = stream;
-    videoEl.muted = true; videoEl.playsInline = true;
-    await videoEl.play();
+    if (!running) { stop(); return { stop, setTuning, setActive, setMaxFps }; }
 
     // 2. Model (GPU first, CPU fallback)
     status('loading');
@@ -197,12 +252,12 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus, tuning: i
     });
     try { landmarker = await make('GPU'); }
     catch (e) { console.warn('GPU delegate failed, using CPU', e); landmarker = await make('CPU'); }
-    if (!running) { stop(); return { stop }; }
-    status('ready');
+    if (!running) { stop(); return { stop, setTuning, setActive, setMaxFps }; }
+    status(active ? 'ready' : 'sleeping');
   } catch (err) {
     status('error', (err && err.message) || String(err));
     stop();
-    return { stop };
+    return { stop, setTuning, setActive, setMaxFps };
   }
 
   // Normalized landmark -> mirrored viewport px, replicating object-fit: cover.
@@ -213,12 +268,17 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus, tuning: i
   }
 
   function frame() {
-    if (!running) return;
-    rafId = requestAnimationFrame(frame);
+    if (!running || !active) return;
+    schedule();
     if (videoEl.readyState < 2 || videoEl.currentTime === lastVideoTime) return;
-    lastVideoTime = videoEl.currentTime;
-
     const nowMs = performance.now(), t = nowMs / 1000;
+    // Rate limit: full rate while a hand is in view, IDLE_FPS once none has been seen for a while.
+    const nowIdle = nowMs - lastHandAt > IDLE_AFTER_MS;
+    if (nowIdle !== idle) { idle = nowIdle; setCameraRate(idle ? 10 : 30); }
+    const fps = idle ? Math.min(IDLE_FPS, maxFps) : maxFps;
+    if (nowMs - lastDetect < 1000 / fps - 4) return;
+    lastDetect = nowMs;
+    lastVideoTime = videoEl.currentTime;
     const vw = videoEl.videoWidth, vh = videoEl.videoHeight;
     if (!vw || !vh) return;
     const W = window.innerWidth, H = window.innerHeight;
@@ -282,12 +342,14 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus, tuning: i
       });
     });
 
+    if (hands.length) lastHandAt = nowMs;
+
     // Forget hands that have been absent too long (state is rebuilt on return).
     for (const [id, st] of states) if (nowMs - st.seen > LOST_MS) states.delete(id);
 
     try { if (onUpdate) onUpdate(hands); } catch (e) { console.error(e); }
   }
-  rafId = requestAnimationFrame(frame);
+  if (active) schedule();
 
-  return { stop, setTuning };
+  return { stop, setTuning, setActive, setMaxFps };
 }

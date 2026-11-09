@@ -327,8 +327,20 @@ function applyState(s) {
   Object.assign(st, s);
   // Drop engaged continuous actions; keep trigger holds so e.g. the pause pose doesn't re-arm and toggle back.
   if (wasActive && !active()) { if (cur && cur.engaged) endBinding(); releasePointer(); }
+  updatePower();
   draw();
   renderChip();
+}
+
+// Power policy: the camera only runs when something needs it.
+//  - control off and Settings closed  -> camera released (nothing can use hand data)
+//  - control on but paused            -> 12 fps (only needs to see the resume pose)
+//  - control on / Settings open       -> full rate (tracker drops to ~6 fps by itself when no hand is in view)
+function updatePower() {
+  if (!tracker || !tracker.setActive) return;
+  const needed = st.enabled || st.settingsOpen;
+  tracker.setActive(needed);
+  if (tracker.setMaxFps) tracker.setMaxFps(st.enabled && st.paused && !st.settingsOpen ? 12 : 30);
 }
 let tracker = null;
 function applyConfig(c) {
@@ -355,4 +367,8 @@ createHandTracker(video, {
     if (status === 'error') console.error('tracking error:', detail);
     renderChip();
   },
-}).then((t) => { tracker = t; if (cfg && cfg.poseTuning && t.setTuning) t.setTuning(cfg.poseTuning); });
+}).then((t) => {
+  tracker = t;
+  if (cfg && cfg.poseTuning && t.setTuning) t.setTuning(cfg.poseTuning);
+  updatePower();
+});
