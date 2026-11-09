@@ -1,0 +1,60 @@
+{
+  "name": "hand-dashboard",
+  "productName": "Hand Control",
+  "version": "2.0.0",
+  "description": "Customisable hand-gesture control layer for Windows via the webcam (MediaPipe + Electron).",
+  "main": "electron/main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "postinstall": "node node_modules/electron/install.js",
+    "icon": "node electron/make-icon.js",
+    "dist": "node -e \"require('child_process').execSync('electron-builder --win --'+(process.arch==='arm64'?'arm64':'x64'),{stdio:'inherit'})\"",
+    "dist:x64": "electron-builder --win --x64",
+    "dist:arm64": "electron-builder --win --arm64"
+  },
+  "dependencies": {
+    "@nut-tree-fork/nut-js": "4.2.6",
+    "koffi": "3.3.7"
+  },
+  "devDependencies": {
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "com.hand-dashboard.handcontrol",
+    "productName": "Hand Control",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "*.html",
+      "*.js",
+      "*.css",
+      "package.json",
+      "!dist/**/*",
+      "!CONTRACT.md"
+    ],
+    "asarUnpack": [
+      "node_modules/@nut-tree-fork/libnut*/**/*",
+      "node_modules/koffi/**/*",
+      "node_modules/@koromix/**/*"
+    ],
+    "npmRebuild": false,
+    "win": {
+      "icon": "electron/icon.png",
+      "target": [
+        "portable",
+        "nsis"
+      ]
+    },
+    "portable": {
+      "artifactName": "HandControl-${version}-portable.exe"
+    },
+    "nsis": {
+      "artifactName": "HandControl-${version}-setup.exe",
+      "oneClick": true
+    }
+  }
+}

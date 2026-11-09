@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workbench</title>
+  <meta name="description" content="A hand-tracked dashboard: pinch to grab, throw and scale cards.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="mouse-mode">
+  <!-- Background: mirrored webcam (tracker coordinates assume cover + scaleX(-1)) -->
+  <video id="cam" autoplay playsinline muted></video>
+  <div class="backdrop" aria-hidden="true"></div>
+
+  <!-- Top bar -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">Workbench</span>
+      <span class="brand-sub">hand-tracked surface</span>
+    </div>
+    <div class="topbar-right">
+      <button class="chip" id="helpOpen" data-press="help-open" hidden>Gestures</button>
+      <div class="status" id="status" role="status" aria-live="polite">
+        <span class="status-dot"></span>
+        <span class="status-text">Starting</span>
+      </div>
+    </div>
+  </header>
+
+  <main id="board" aria-label="Dashboard cards">
+
+    <!-- 01 CHRONO -->
+    <section class="card card--clock" data-card="clock" aria-label="Clock">
+      <header class="card-head"><span class="pn">01</span><h2>Chrono</h2><span class="led on"></span></header>
+      <div class="clock">
+        <svg class="dial" viewBox="0 0 120 120" aria-hidden="true">
+          <g class="ticks"></g>
+          <line class="hand-h" x1="60" y1="60" x2="60" y2="32"/>
+          <line class="hand-m" x1="60" y1="60" x2="60" y2="18"/>
+          <line class="hand-s" x1="60" y1="68" x2="60" y2="14"/>
+          <circle class="hub" cx="60" cy="60" r="3"/>
+        </svg>
+        <div class="clock-read">
+          <div class="time" id="clockTime">--:--<span class="sec">--</span></div>
+          <div class="date" id="clockDate">—</div>
+        </div>
+      </div>
+      <div class="meter">
+        <div class="meter-label"><span>Day elapsed</span><span id="dayPct">—</span></div>
+        <div class="meter-track"><div class="meter-fill" id="dayFill"></div></div>
+        <div class="meter-label dim"><span id="weekNo">Week —</span><span id="dayOfYear">Day —</span></div>
+      </div>
+    </section>
+
+    <!-- 02 TELEMETRY -->
+    <section class="card card--telemetry" data-card="telemetry" aria-label="Hand telemetry">
+      <header class="card-head"><span class="pn">02</span><h2>Telemetry</h2><span class="led" id="telLed"></span></header>
+      <div class="tel-grid">
+        <div class="tel-hand" data-hand="Left">
+          <div class="tel-hand-name">L</div>
+          <div class="tel-gesture">—</div>
+          <div class="bar"><div class="bar-fill"></div></div>
+          <div class="tel-xy">x — y —</div>
+        </div>
+        <div class="tel-hand" data-hand="Right">
+          <div class="tel-hand-name">R</div>
+          <div class="tel-gesture">—</div>
+          <div class="bar"><div class="bar-fill"></div></div>
+          <div class="tel-xy">x — y —</div>
+        </div>
+      </div>
+      <dl class="readouts">
+        <div><dt>Source</dt><dd id="telSource">mouse</dd></div>
+        <div><dt>Tracker</dt><dd id="telHz">— Hz</dd></div>
+        <div><dt>Render</dt><dd id="telFps">— fps</dd></div>
+        <div><dt>Hands</dt><dd id="telCount">0</dd></div>
+      </dl>
+    </section>
+
+    <!-- 03 INTERVALS (music) -->
+    <section class="card card--intervals" data-card="intervals" aria-label="Musical intervals">
+      <header class="card-head"><span class="pn">03</span><h2>Intervals</h2><span class="audio-state" id="audioState">audio locked</span></header>
+      <canvas class="viz" id="lissajous" width="300" height="170" aria-label="Lissajous figure of the selected interval"></canvas>
+      <div class="interval-name"><span id="intName">Perfect fifth</span><span class="ratio" id="intRatio">3 : 2</span></div>
+      <div class="keys keys--5" role="group" aria-label="Choose interval">
+        <button class="key" data-press="interval" data-a="1" data-b="1" data-name="Unison">1:1</button>
+        <button class="key" data-press="interval" data-a="5" data-b="4" data-name="Major third">5:4</button>
+        <button class="key" data-press="interval" data-a="4" data-b="3" data-name="Perfect fourth">4:3</button>
+        <button class="key is-on" data-press="interval" data-a="3" data-b="2" data-name="Perfect fifth">3:2</button>
+        <button class="key" data-press="interval" data-a="2" data-b="1" data-name="Octave">2:1</button>
+      </div>
+    </section>
+
+    <!-- 04 DRILL TIMER (badminton) -->
+    <section class="card card--timer" data-card="timer" aria-label="Drill timer">
+      <header class="card-head"><span class="pn">04</span><h2>Drill timer</h2><span class="led" id="timerLed"></span></header>
+      <div class="timer-read" id="timerRead">00:00<span class="cs">.00</span></div>
+      <div class="keys keys--3" role="group" aria-label="Timer controls">
+        <button class="key key--primary" data-press="timer-toggle" id="timerToggle">Start</button>
+        <button class="key" data-press="timer-lap" id="timerLap" disabled>Lap</button>
+        <button class="key" data-press="timer-reset" id="timerReset" disabled>Reset</button>
+      </div>
+      <ol class="laps" id="laps" aria-label="Laps"><li class="empty">Pinch Start, then Lap after each rally set</li></ol>
+    </section>
+
+    <!-- 05 SHUTTLE (badminton physics) -->
+    <section class="card card--shuttle" data-card="shuttle" aria-label="Shuttlecock flight">
+      <header class="card-head"><span class="pn">05</span><h2>Shuttle flight</h2><span class="tag">drag model</span></header>
+      <canvas class="viz" id="shuttle" width="340" height="150" aria-label="Shuttlecock trajectory over a badminton court"></canvas>
+      <dl class="readouts readouts--4">
+        <div><dt>Launch</dt><dd id="shV">—</dd></div>
+        <div><dt>Apex</dt><dd id="shApex">—</dd></div>
+        <div><dt>Flight</dt><dd id="shT">—</dd></div>
+        <div><dt>Result</dt><dd id="shRes">—</dd></div>
+      </dl>
+      <div class="keys keys--3" role="group" aria-label="Choose shot">
+        <button class="key" data-press="shot" data-shot="clear">Clear</button>
+        <button class="key" data-press="shot" data-shot="drop">Drop</button>
+        <button class="key" data-press="shot" data-shot="smash">Smash</button>
+      </div>
+      <p class="footnote">Quadratic drag, terminal velocity 6.8 m/s. Hit from the left, net at 6.7 m.</p>
+    </section>
+
+    <!-- 06 LINKAGE (mechanical engineering) -->
+    <section class="card card--linkage" data-card="linkage" aria-label="Four-bar linkage">
+      <header class="card-head"><span class="pn">06</span><h2>Four-bar</h2><span class="tag">crank–rocker</span></header>
+      <canvas class="viz" id="linkage" width="300" height="180" aria-label="Animated four-bar linkage with coupler curve"></canvas>
+      <dl class="readouts readouts--3">
+        <div><dt>Crank θ₂</dt><dd id="lkTheta">—</dd></div>
+        <div><dt>Transm. γ</dt><dd id="lkGamma">—</dd></div>
+        <div><dt>γ range</dt><dd id="lkRange">—</dd></div>
+      </dl>
+      <div class="keys keys--2" role="group" aria-label="Linkage controls">
+        <button class="key" data-press="linkage-toggle" id="lkToggle">Pause</button>
+        <button class="key" data-press="linkage-trace" id="lkTrace">Hide trace</button>
+      </div>
+    </section>
+
+    <!-- 07 NOTES -->
+    <section class="card card--notes" data-card="notes" aria-label="Notes">
+      <header class="card-head"><span class="pn">07</span><h2>Notes</h2><span class="tag" id="notesSaved">saved locally</span></header>
+      <textarea id="notes" spellcheck="false" aria-label="Notes" placeholder="Click to type. Grab the card by its header or edges."></textarea>
+    </section>
+
+  </main>
+
+  <!-- Hand overlay -->
+  <canvas id="overlay" aria-hidden="true"></canvas>
+
+  <!-- Gesture help -->
+  <aside class="help" id="help" aria-label="Gesture help">
+    <header class="help-head">
+      <h2>Gestures</h2>
+      <span class="help-mode" id="helpMode">mouse mode</span>
+    </header>
+    <ul>
+      <li><span class="g">Pinch</span><span>Grab a card. Let go mid-swing to throw it.</span></li>
+      <li><span class="g">Pinch tap</span><span>Press a key on a card.</span></li>
+      <li><span class="g">Two pinches</span><span>Scale and rotate a card held in both hands.</span></li>
+      <li><span class="g">Open palm</span><span>Hold for one second to tidy the layout.</span></li>
+      <li class="mouse-only"><span class="g">Mouse</span><span>Press to pinch. Wheel scales, Shift + wheel rotates, T tidies.</span></li>
+    </ul>
+    <div class="help-actions">
+      <button class="key" data-press="tidy">Tidy now</button>
+      <button class="key key--primary" data-press="help-close">Got it</button>
+    </div>
+  </aside>
+
+  <script type="module" src="dashboard.js"></script>
+</body>
+</html>

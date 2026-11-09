@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HandControl Settings</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+  <!-- Slow-drifting colour field behind the glass (works in a browser and over Windows acrylic) -->
+  <div class="backdrop" aria-hidden="true">
+    <span class="blob b1"></span><span class="blob b2"></span><span class="blob b3"></span>
+    <span class="blob b4"></span><span class="blob b5"></span>
+  </div>
+
+  <div class="app">
+    <header class="glass topbar">
+      <div class="brand">
+        <div class="brand-mark" id="brandMark" aria-hidden="true"></div>
+        <div class="brand-text">
+          <h1>HandControl</h1>
+          <span class="save-state" id="saveState" aria-live="polite"></span>
+        </div>
+      </div>
+
+      <div class="status" id="status">
+        <span class="chip" id="statusChip" title="Camera / model status"><i class="dot"></i><span>Waiting for tracker…</span></span>
+        <span class="chip subtle" id="backendChip" title="Mouse backend"><span>Mouse: —</span></span>
+      </div>
+
+      <div class="top-controls">
+        <label class="toggle-label">
+          <span>Pause</span>
+          <button class="switch" id="pauseSwitch" role="switch" aria-checked="false" aria-label="Pause gestures"><i></i></button>
+        </label>
+        <button class="power" id="powerSwitch" role="switch" aria-checked="false">
+          <span class="power-track"><i></i></span>
+          <span class="power-text"><b>Control</b><em id="powerState">Off</em></span>
+        </button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="glass panel live" aria-labelledby="liveTitle">
+        <div class="panel-head">
+          <h2 id="liveTitle">Live view</h2>
+          <span class="hint">Try a gesture in front of the camera</span>
+        </div>
+        <div class="stage" id="stage">
+          <video class="stage-cam" id="stageCam" autoplay muted playsinline aria-hidden="true"></video>
+          <canvas class="stage-skel" id="stageSkel" aria-hidden="true"></canvas>
+          <span class="stage-label">Camera</span>
+          <div class="stage-empty" id="stageEmpty">No hands in view</div>
+        </div>
+        <div class="readout">
+          <div class="ring-wrap">
+            <svg class="ring" viewBox="0 0 100 100" aria-hidden="true">
+              <circle class="ring-bg" cx="50" cy="50" r="44"/>
+              <circle class="ring-fg" id="ringFg" cx="50" cy="50" r="44" pathLength="100"/>
+            </svg>
+            <div class="ring-icon" id="ringIcon"></div>
+          </div>
+          <div class="readout-text">
+            <div class="pose-name" id="poseName">—</div>
+            <div class="binding-name" id="bindingName">Waiting for tracker…</div>
+          </div>
+        </div>
+        <div class="fired-wrap">
+          <div class="fired" id="fired" aria-live="polite"></div>
+          <div class="last-line" id="lastLine">No actions fired yet</div>
+        </div>
+      </section>
+
+      <div class="column">
+        <section class="glass panel" aria-labelledby="bindTitle">
+          <div class="panel-head">
+            <h2 id="bindTitle">Gestures</h2>
+            <div class="head-actions" id="bindActions">
+              <button class="btn ghost sm" id="resetBtn">Reset to defaults</button>
+              <button class="btn primary sm" id="addBtn"><span aria-hidden="true">+</span> Add gesture</button>
+            </div>
+          </div>
+          <div class="list" id="list" role="list"></div>
+        </section>
+
+        <section class="glass panel" aria-labelledby="ptrTitle">
+          <div class="panel-head">
+            <h2 id="ptrTitle">Pointer</h2>
+            <span class="hint">Pinch to move · quick pinch clicks · hold to drag</span>
+          </div>
+          <div class="pointer" id="pointer"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="scrim" id="scrim"></div>
+  <aside class="glass sheet" id="sheet" aria-label="Edit gesture" aria-hidden="true">
+    <div class="sheet-inner" id="sheetBody"></div>
+  </aside>
+
+  <script type="module" src="settings.js"></script>
+</body>
+</html>

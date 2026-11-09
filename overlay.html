@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Hand Control Overlay</title>
+  <style>
+    :root {
+      --glass: rgba(22, 26, 36, 0.62);
+      --glass-edge: rgba(255, 255, 255, 0.18);
+      --text: #eef2f8;
+      --muted: rgba(226, 232, 242, 0.7);
+      --idle: #a3acbb; --active: #5eead4; --paused: #fbbf24; --error: #f87171; --busy: #93c5fd;
+    }
+    html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
+    /* The video must stay full-viewport, cover-fitted and mirrored so tracking.js coordinates are right. */
+    #cam {
+      position: fixed; inset: 0; width: 100vw; height: 100vh;
+      object-fit: cover; transform: scaleX(-1); opacity: 0; pointer-events: none;
+    }
+    #ink { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; }
+    #chip {
+      position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+      font: 600 13px/1.2 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; color: var(--text);
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.02)), var(--glass);
+      border: 1px solid var(--glass-edge); border-radius: 999px;
+      padding: 7px 14px 7px 12px; display: flex; gap: 8px; align-items: center;
+      white-space: nowrap; pointer-events: none;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+      transition: opacity 180ms ease;
+    }
+    #chip.hidden { opacity: 0; }
+    #dot { width: 8px; height: 8px; border-radius: 50%; background: var(--idle); flex: none; box-shadow: 0 0 8px currentColor; color: var(--idle); }
+    #chip.active #dot { background: var(--active); color: var(--active); }
+    #chip.paused #dot { background: var(--paused); color: var(--paused); }
+    #chip.error #dot { background: var(--error); color: var(--error); }
+    #chip.busy #dot { background: var(--busy); color: var(--busy); }
+    #hint { font-weight: 400; color: var(--muted); }
+    #hint:empty { display: none; }
+  </style>
+</head>
+<body>
+  <video id="cam" autoplay muted playsinline></video>
+  <canvas id="ink"></canvas>
+  <div id="chip" class="hidden"><span id="dot"></span><span id="label">Starting...</span><span id="hint"></span></div>
+  <script type="module" src="overlay.js"></script>
+</body>
+</html>
