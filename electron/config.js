@@ -20,6 +20,12 @@ const DEFAULT_BINDINGS = [
   { id: 'show-desktop', enabled: false, name: 'Show desktop', pose: 'call', hand: 'any', holdMs: 500, cooldownMs: 1000, action: { type: 'keys', combo: 'Win+D' } },
 ];
 
+// Per-pose detection thresholds (see tracking.js classifyPose). Must match DEFAULT_TUNING there.
+const TUNED_POSES = ['open', 'fist', 'point', 'two', 'three', 'thumb', 'rock', 'call', 'L', 'pinky'];
+const BASE_TUNING = { up: 1.15, down: 1.15, thumb: 0.55, frames: 3 };
+const DEFAULT_TUNING = Object.fromEntries(TUNED_POSES.map((id) => [id, { ...BASE_TUNING }]));
+DEFAULT_TUNING.open = { up: 1.25, down: 1.15, thumb: 0.75, frames: 3, spread: 0.95 };
+
 const DEFAULTS = {
   version: VERSION,
   enabled: false,
@@ -28,7 +34,25 @@ const DEFAULTS = {
   cursorSmoothing: 0.5,
   clickMaxMs: 250,
   bindings: DEFAULT_BINDINGS,
+  poseTuning: DEFAULT_TUNING,
 };
+
+function validateTuning(input) {
+  const src = input && typeof input === 'object' ? input : {};
+  const out = {};
+  for (const id of TUNED_POSES) {
+    const t = src[id] && typeof src[id] === 'object' ? src[id] : {};
+    const d = DEFAULT_TUNING[id];
+    out[id] = {
+      up: num(t.up, 1.0, 1.6, d.up),
+      down: num(t.down, 0.8, 1.4, d.down),
+      thumb: num(t.thumb, 0.3, 1.2, d.thumb),
+      frames: Math.round(num(t.frames, 1, 15, d.frames)),
+    };
+    if ('spread' in d) out[id].spread = num(t.spread, 0.5, 1.5, d.spread);
+  }
+  return out;
+}
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const num = (v, lo, hi, def) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def);
@@ -89,6 +113,7 @@ function validate(input) {
     cursorSmoothing: num(c.cursorSmoothing, 0, 1, d.cursorSmoothing),
     clickMaxMs: Math.round(num(c.clickMaxMs, 80, 1000, d.clickMaxMs)),
     bindings,
+    poseTuning: validateTuning(c.poseTuning),
   };
 }
 

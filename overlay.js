@@ -309,8 +309,8 @@ setInterval(() => {
     hands: lastHands.map((h) => ({
       // overlay px == primary-display DIP (Settings divides by screen.width)
       id: h.id, x: h.x, y: h.y, pose: poseOf(h), fingers: h.fingers || null,
-      pinch: !!h.pinch, pinchStrength: h.pinchStrength || 0,
-      lm: Array.isArray(h.landmarks) ? h.landmarks.map((p) => [Math.round(p.x), Math.round(p.y)]) : null,
+      pinch: !!h.pinch, pinchStrength: h.pinchStrength || 0, metrics: h.metrics || null,
+      lm:Array.isArray(h.landmarks) ? h.landmarks.map((p) => [Math.round(p.x), Math.round(p.y)]) : null,
     })),
     activeBinding: cur ? cur.b.id : null,
     holdProgress: holdProgress(),
@@ -330,7 +330,12 @@ function applyState(s) {
   draw();
   renderChip();
 }
-function applyConfig(c) { if (c && Array.isArray(c.bindings)) cfg = c; }
+let tracker = null;
+function applyConfig(c) {
+  if (!c || !Array.isArray(c.bindings)) return;
+  cfg = c;
+  if (tracker && tracker.setTuning && c.poseTuning) tracker.setTuning(c.poseTuning);
+}
 
 if (api) {
   api.onState(applyState);
@@ -344,9 +349,10 @@ renderChip();
 
 createHandTracker(video, {
   onUpdate,
+  tuning: cfg && cfg.poseTuning,
   onStatus(status, detail) {
     st.track = status; st.trackDetail = detail || '';
     if (status === 'error') console.error('tracking error:', detail);
     renderChip();
   },
-});
+}).then((t) => { tracker = t; if (cfg && cfg.poseTuning && t.setTuning) t.setTuning(cfg.poseTuning); });

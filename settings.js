@@ -44,10 +44,16 @@ const poseById = (id) => POSES.find((p) => p.id === id) || EXTRA_POSES[id] || nu
 const poseLabel = (id) => (poseById(id) || { label: id || '—' }).label;
 
 // ---------- defaults (§2) ----------
+const TUNE_BASE = { up: 1.15, down: 1.15, thumb: 0.55, frames: 3 };
+const TUNE_OPEN = { up: 1.25, down: 1.15, thumb: 0.75, frames: 3, spread: 0.95 };
+const TUNE_IDS = ['open', 'fist', 'point', 'two', 'three', 'thumb', 'rock', 'call', 'L', 'pinky'];
+const defaultTune = (id) => ({ ...(id === 'open' ? TUNE_OPEN : TUNE_BASE) });
+const defaultPoseTuning = () => Object.fromEntries(TUNE_IDS.map((id) => [id, defaultTune(id)]));
 function defaultConfig() {
   const b = (id, pose, name, action, extra = {}) => ({ id, enabled: true, name, pose, hand: 'any', holdMs: 500, cooldownMs: 1000, action, ...extra });
   return {
     version: 2, enabled: false, primaryHand: 'Right', comfortBox: { w: 0.7, h: 0.6 }, cursorSmoothing: 0.5, clickMaxMs: 250,
+    poseTuning: defaultPoseTuning(),
     bindings: [
       b('fist-move', 'fist', 'Move window', { type: 'moveWindow' }, { holdMs: 250 }),
       b('two-play', 'two', 'Play / pause', { type: 'media', key: 'playpause' }),
@@ -229,14 +235,24 @@ function installMock() {
     const elapsed = (now - t0) % SEG;
     const sw = screen.width || 1920, sh = screen.height || 1080;
     const hands = [];
+    const jit = (amp, ph) => amp * Math.sin(t * 2.3 + ph) + amp * 0.6 * (Math.random() - 0.5);
+    const fakeMetrics = (fingers, spreadOut) => {
+      const f = fingers || {};
+      const m = {};
+      ['index', 'middle', 'ring', 'pinky'].forEach((k, j) => { m[k] = +((f[k] ? 1.32 : 0.94) + jit(0.09, j)).toFixed(3); });
+      m.thumb = +((f.thumb ? 0.86 : 0.38) + jit(0.1, 5)).toFixed(3);
+      m.spread = +((spreadOut ? 1.1 : 0.62) + jit(0.12, 7)).toFixed(3);
+      return m;
+    };
     if (pose !== 'none') {
       const p = poseById(pose);
       hands.push({
         id: 'Right', x: sw * (0.55 + 0.25 * Math.sin(t * 0.7)), y: sh * (0.5 + 0.28 * Math.sin(t * 1.1 + 1)),
         pose, fingers: p ? { ...p.fingers } : {}, pinch: pose === 'pinch', pinchStrength: pose === 'pinch' ? 0.9 : 0.1,
+        metrics: fakeMetrics(p && p.fingers, pose === 'open'),
       });
       if (pose === 'open' || pose === 'L') {
-        hands.push({ id: 'Left', x: sw * (0.25 + 0.08 * Math.sin(t)), y: sh * 0.6, pose: 'fist', fingers: { ...poseById('fist').fingers }, pinch: false, pinchStrength: 0 });
+        hands.push({ id: 'Left', x: sw * (0.25 + 0.08 * Math.sin(t)), y: sh * 0.6, pose: 'fist', fingers: { ...poseById('fist').fingers }, pinch: false, pinchStrength: 0, metrics: fakeMetrics(poseById('fist').fingers, false) });
       }
     }
     const b = cfg.bindings.find((x) => x.enabled && x.pose === pose && (x.hand === 'any' || x.hand === 'Right'));
@@ -276,6 +292,7 @@ let lastToggleAt = 0;
 let lastFiredAt = 0;
 let recording = false;
 let resetArmed = false, deleteArmed = false;
+let tuneSel = 'open', tuneResetArmed = false;
 
 function call(name, ...args) {
   const fn = window.hand && window.hand[name];
@@ -293,6 +310,10 @@ function sanitizeConfig(c) {
     holdMs: Number.isFinite(+b.holdMs) ? +b.holdMs : 500, cooldownMs: Number.isFinite(+b.cooldownMs) ? +b.cooldownMs : 1000,
     action: b.action && b.action.type ? { ...b.action } : { type: 'none' },
   })) : d.bindings;
+  const pt = (c && c.poseTuning && typeof c.poseTuning === 'object') ? c.poseTuning : {};
+  out.poseTuning = {};
+  for (const [id, v] of Object.entries(pt)) if (v && typeof v === 'object') out.poseTuning[id] = { ...v };
+  for (const id of TUNE_IDS) if (!out.poseTuning[id]) out.poseTuning[id] = defaultTune(id);
   return out;
 }
 
@@ -803,6 +824,177 @@ function renderTelemetry(t) {
   if (t.paused && t.enabled) $('#lastLine').textContent = 'Paused — gestures won’t fire (except Pause)';
 
   markLiveRow();
+  updateTuneMeter();
+}
+
+// ---------- pose tuning ----------
+const TUNE_FINGERS = ['thumb', 'index', 'middle', 'ring', 'pinky'];
+const FINGER_LABEL = { thumb: 'Thumb', index: 'Index', middle: 'Middle', ring: 'Ring', pinky: 'Pinky', spread: 'Spread' };
+// display range of each meter bar (same units as the metrics)
+const METER_RANGE = { finger: [0.6, 1.8], thumb: [0, 1.4], spread: [0, 2] };
+const TUNE_FIELDS = {
+  up:     { min: 1.0, max: 1.6, step: 0.01, strictHigh: true },
+  down:   { min: 0.8, max: 1.4, step: 0.01, strictHigh: false },
+  thumb:  { min: 0.3, max: 1.2, step: 0.01, strictHigh: true },
+  spread: { min: 0.5, max: 1.5, step: 0.01, strictHigh: true },
+};
+const tuneOf = (id) => ({ ...defaultTune(id), ...((cfg && cfg.poseTuning && cfg.poseTuning[id]) || {}) });
+const isTuneDefault = (id) => { const t = tuneOf(id), d = defaultTune(id); return Object.keys(d).every((k) => Math.abs(+t[k] - d[k]) < 1e-9); };
+const tunePoses = () => POSES.filter((p) => p.fingers);
+const framesMs = (n) => '~' + Math.round(n * 1000 / 30) + ' ms';
+
+/** What a pose needs from each finger: [{k, need:'up'|'down'|'out'|'in'|'wide', thr, range}] */
+function tuneRequirements(id) {
+  const p = poseById(id); if (!p || !p.fingers) return [];
+  const t = tuneOf(id);
+  const req = TUNE_FINGERS.map((k) => k === 'thumb'
+    ? { k, need: p.fingers.thumb ? 'out' : 'in', thr: +t.thumb, range: METER_RANGE.thumb }
+    : { k, need: p.fingers[k] ? 'up' : 'down', thr: p.fingers[k] ? +t.up : +t.down, range: METER_RANGE.finger });
+  if (id === 'open') req.push({ k: 'spread', need: 'wide', thr: +t.spread, range: METER_RANGE.spread });
+  return req;
+}
+const NEED_TEXT = { up: 'raised', down: 'folded', out: 'out', in: 'tucked', wide: 'spread' };
+const needSym = (r) => (r.need === 'down' ? '<' : r.need === 'in' ? '≤' : '>');
+const reqText = (r) => `${NEED_TEXT[r.need]} · ${needSym(r)} ${r.thr.toFixed(2)}`;
+const passes = (r, v) => (r.need === 'down' ? v < r.thr : r.need === 'in' ? v <= r.thr : v > r.thr);
+const meterPct = (r, v) => clamp((v - r.range[0]) / (r.range[1] - r.range[0]), 0, 1) * 100;
+
+function tuneSlider(f, label, val, note) {
+  const d = TUNE_FIELDS[f];
+  const lo = d.strictHigh ? 'looser' : 'stricter', hi = d.strictHigh ? 'stricter' : 'looser';
+  return `<div class="field tune-field"><label for="tn-${f}">${label}<output id="tno-${f}">${(+val).toFixed(2)}</output></label>
+    <input type="range" id="tn-${f}" data-tune="${f}" min="${d.min}" max="${d.max}" step="${d.step}" value="${val}" style="--p:${((val - d.min) / (d.max - d.min)) * 100}%">
+    <span class="tune-scale"><span>← ${lo}</span>${note ? `<span class="tune-note">${note}</span>` : ''}<span>${hi} →</span></span></div>`;
+}
+
+function renderTuneActions() {
+  const el = $('#tuneActions'); if (!el) return;
+  el.innerHTML = tuneResetArmed
+    ? `<span class="confirm-text">Reset tuning for every pose?</span>
+       <button class="btn ghost sm" data-tn="resetAllCancel">Cancel</button>
+       <button class="btn danger armed sm" data-tn="resetAllConfirm">Reset all</button>`
+    : `<button class="btn ghost sm" data-tn="resetAll"${TUNE_IDS.every(isTuneDefault) ? ' disabled' : ''}>Reset all poses</button>`;
+}
+
+function renderTuning() {
+  const el = $('#tuning'); if (!el || !cfg) return;
+  const poses = tunePoses();
+  if (!poses.some((p) => p.id === tuneSel)) tuneSel = (poses[0] || { id: 'open' }).id;
+  const p = poseById(tuneSel); if (!p) { el.innerHTML = ''; return; }
+  const t = tuneOf(tuneSel);
+  const raised = ['index', 'middle', 'ring', 'pinky'].filter((k) => p.fingers[k]).length;
+  const sliders = [];
+  if (raised) sliders.push(tuneSlider('up', 'Raised fingers must be straighter', +t.up));
+  if (raised < 4) sliders.push(tuneSlider('down', 'Folded fingers must be curled tighter', +t.down));
+  sliders.push(p.fingers.thumb
+    ? tuneSlider('thumb', 'Thumb must stick out further', +t.thumb)
+    : tuneSlider('thumb', 'Thumb may stick out up to', +t.thumb, 'lower = tuck tighter'));
+  if (tuneSel === 'open') sliders.push(tuneSlider('spread', 'Fingers spread wider', +t.spread));
+  sliders.push(`<div class="field tune-field"><label for="tn-frames"><span>Hold steady for <span id="tnf-n">${+t.frames}</span> frames</span><output id="tno-frames">${framesMs(+t.frames)}</output></label>
+    <input type="range" id="tn-frames" data-tune="frames" min="1" max="15" step="1" value="${+t.frames}" style="--p:${((t.frames - 1) / 14) * 100}%">
+    <span class="tune-scale"><span>← quicker</span><span>steadier →</span></span></div>`);
+  el.innerHTML = `
+    <div class="pose-grid tune-poses" role="group" aria-label="Pose to tune">
+      ${poses.map((q) => `<button class="pose-btn${isTuneDefault(q.id) ? '' : ' tuned'}" data-tpose="${esc(q.id)}" aria-pressed="${q.id === tuneSel}" title="${esc(q.label)}${isTuneDefault(q.id) ? '' : ' (custom tuning)'}">${poseSVG(q.id)}<span>${esc(q.label)}</span></button>`).join('')}
+    </div>
+    <div class="tune-body">
+      <div class="tune-controls">
+        <div class="tune-head">
+          <h3>${esc(p.label)}</h3>
+          <button class="btn ghost sm" data-tn="resetPose"${isTuneDefault(tuneSel) ? ' disabled' : ''}>Reset</button>
+        </div>
+        ${sliders.join('')}
+      </div>
+      <div class="tune-meter">
+        <div class="meter-head"><span class="flabel">Your hand now</span><span class="meter-src" id="meterSrc">—</span></div>
+        <div class="meter-rows" id="meterRows"></div>
+        <div class="match" id="tuneMatch" aria-live="polite">Show your hand to the camera</div>
+      </div>
+    </div>`;
+  renderMeterRows();
+  renderTuneActions();
+}
+
+function renderMeterRows() {
+  const rows = $('#meterRows'); if (!rows) return;
+  rows.innerHTML = tuneRequirements(tuneSel).map((r) => `
+    <div class="meter na" data-k="${r.k}">
+      <div class="meter-label"><b>${FINGER_LABEL[r.k]}</b><span class="meter-req">${reqText(r)}</span><output>—</output></div>
+      <div class="meter-track"><i class="meter-fill"></i><i class="meter-thr" style="left:${meterPct(r, r.thr)}%"></i></div>
+    </div>`).join('');
+  updateTuneMeter();
+}
+
+function tuneHand() {
+  const hands = telem && Array.isArray(telem.hands) ? telem.hands : [];
+  return hands.find((h) => h.id === (cfg && cfg.primaryHand) && h.metrics) || hands.find((h) => h.metrics) || hands[0] || null;
+}
+let lastMatchText = '';
+function updateTuneMeter() {
+  const rows = $('#meterRows'); if (!rows) return;
+  const h = tuneHand();
+  const m = h && h.metrics && typeof h.metrics === 'object' ? h.metrics : null;
+  $('#meterSrc').textContent = h
+    ? (h.id ? h.id + ' hand' : 'Hand') + (h.pose && h.pose !== 'none' ? ' · seen as ' + poseLabel(h.pinch ? 'pinch' : h.pose) : '')
+    : 'No hand in view';
+  let all = true, any = false;
+  for (const r of tuneRequirements(tuneSel)) {
+    const row = rows.querySelector(`.meter[data-k="${r.k}"]`); if (!row) continue;
+    const v = m ? +m[r.k] : NaN;
+    const ok = m != null && m[r.k] != null && Number.isFinite(v);
+    const pass = ok && passes(r, v);
+    if (ok) any = true;
+    if (!pass) all = false;
+    row.classList.toggle('pass', pass);
+    row.classList.toggle('fail', ok && !pass);
+    row.classList.toggle('na', !ok);
+    row.querySelector('.meter-fill').style.width = (ok ? meterPct(r, v) : 0) + '%';
+    row.querySelector('output').textContent = ok ? v.toFixed(2) : '—';
+  }
+  const match = $('#tuneMatch');
+  const text = !h ? 'Show your hand to the camera'
+    : !any ? 'No finger measurements from the tracker yet'
+    : all ? '✓ Matches ' + poseLabel(tuneSel) : 'Not matching ' + poseLabel(tuneSel);
+  if (text !== lastMatchText || !match.textContent) {
+    lastMatchText = text;
+    match.className = 'match' + (any ? (all ? ' ok' : ' no') : '');
+    match.textContent = text;
+  }
+}
+
+function refreshTuneChrome() {
+  const btn = document.querySelector(`[data-tpose="${CSS.escape(tuneSel)}"]`);
+  if (btn) btn.classList.toggle('tuned', !isTuneDefault(tuneSel));
+  const rp = document.querySelector('[data-tn="resetPose"]'); if (rp) rp.disabled = isTuneDefault(tuneSel);
+  if (!tuneResetArmed) renderTuneActions();
+}
+function onTuneInput(e) {
+  const inp = e.target.closest('input[data-tune]'); if (!inp) return;
+  const f = inp.dataset.tune, v = f === 'frames' ? Math.round(+inp.value) : +(+inp.value).toFixed(2);
+  cfg.poseTuning = cfg.poseTuning || {};
+  cfg.poseTuning[tuneSel] = { ...tuneOf(tuneSel), [f]: v };
+  setRangeFill(inp);
+  if (f === 'frames') { $('#tnf-n').textContent = v; $('#tno-frames').textContent = framesMs(v); }
+  else $('#tno-' + f).textContent = v.toFixed(2);
+  // move threshold markers / requirement text without rebuilding the sliders
+  for (const r of tuneRequirements(tuneSel)) {
+    const row = document.querySelector(`#meterRows .meter[data-k="${r.k}"]`); if (!row) continue;
+    row.querySelector('.meter-thr').style.left = meterPct(r, r.thr) + '%';
+    row.querySelector('.meter-req').textContent = reqText(r);
+  }
+  updateTuneMeter();
+  refreshTuneChrome();
+  scheduleSave();
+}
+function onTuneClick(e) {
+  const t = e.target.closest('button'); if (!t) return;
+  if (t.dataset.tpose) { tuneSel = t.dataset.tpose; return renderTuning(); }
+  switch (t.dataset.tn) {
+    case 'resetPose': cfg.poseTuning[tuneSel] = defaultTune(tuneSel); renderTuning(); return scheduleSave();
+    case 'resetAll': tuneResetArmed = true; renderTuneActions(); return $('[data-tn="resetAllCancel"]').focus();
+    case 'resetAllCancel': tuneResetArmed = false; return renderTuneActions();
+    case 'resetAllConfirm': tuneResetArmed = false; cfg.poseTuning = defaultPoseTuning(); renderTuning(); return scheduleSave();
+  }
 }
 
 // ---------- reset ----------
@@ -848,6 +1040,7 @@ async function onBindActions(e) {
 function renderAll() {
   renderList();
   renderPointer();
+  renderTuning();
   if (editingId) renderEditor();
 }
 
@@ -870,6 +1063,9 @@ function wire() {
   });
   $('#bindActions').addEventListener('click', onBindActions);
   $('#pointer').addEventListener('input', onPointerInput);
+  $('#tuning').addEventListener('input', onTuneInput);
+  $('#tuning').addEventListener('click', onTuneClick);
+  $('#tuneActions').addEventListener('click', onTuneClick);
   $('#pointer').addEventListener('click', (e) => {
     const t = e.target.closest('[data-primary]'); if (!t) return;
     cfg.primaryHand = t.dataset.primary;

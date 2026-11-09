@@ -103,12 +103,47 @@ export const POSES = [
   { id: 'pinky', label: 'Pinky',       fingers: F('pinky') },
 ];
 
-export function classifyPose(p, fingers, pinching) {
+// ---------- Per-pose tunable thresholds (config.poseTuning; must match electron/config.js) ----------
+// up:     a finger the pose needs RAISED must have tip-to-wrist / PIP-to-wrist above this
+// down:   a finger the pose needs FOLDED must be below this
+// thumb:  thumb tip to index MCP / hand size; above = thumb out (plus fixed angle/pinky checks), else tucked
+// frames: consecutive frames before the pose registers;  spread (open only): index tip to pinky tip / hand size
+const BASE_TUNING = { up: FINGER_UP, down: FINGER_UP, thumb: THUMB_IDX, frames: GESTURE_FRAMES };
+export const DEFAULT_TUNING = Object.fromEntries(POSES.map((s) => [s.id, { ...BASE_TUNING }]));
+DEFAULT_TUNING.open = { up: OPEN_STRAIGHT, down: FINGER_UP, thumb: OPEN_THUMB, frames: GESTURE_FRAMES, spread: OPEN_SPREAD };
+
+// Raw continuous measurements the thresholds are compared against (also sent to Settings' live meter).
+export function fingerMetrics(p) {
+  const size = dist(p[0], p[9]) || 1;
+  const r = ([tip, pip]) => dist(p[0], p[tip]) / (dist(p[0], p[pip]) || 1);
+  return {
+    thumb: dist(p[4], p[5]) / size,
+    index: r([8, 6]), middle: r([12, 10]), ring: r([16, 14]), pinky: r([20, 18]),
+    spread: dist(p[8], p[20]) / size,
+    thumbPinky: dist(p[4], p[17]) / size,
+    thumbAngle: angleAt(p[3], p[2], p[4]),
+  };
+}
+const thumbOut = (m, thr) => m.thumb > thr && m.thumbPinky > THUMB_PINKY && m.thumbAngle > THUMB_ANGLE;
+const tuneFor = (tuning, id) => ({ ...DEFAULT_TUNING[id], ...((tuning && tuning[id]) || {}) });
+
+// Returns the pose whose every requirement passes; if several pass, the one with the largest margin.
+export function classifyPose(p, pinching, tuning = DEFAULT_TUNING, m = fingerMetrics(p)) {
   if (pinching) return 'pinch';
-  const hit = POSES.find((s) => FINGER_NAMES.every((n) => s.fingers[n] === fingers[n]));
-  if (!hit) return 'none';
-  if (hit.id === 'open' && !isWideOpenPalm(p)) return 'none';
-  return hit.id;
+  let best = 'none', bestMargin = -Infinity;
+  for (const pose of POSES) {
+    const t = tuneFor(tuning, pose.id);
+    let margin = Infinity;
+    for (const n of ['index', 'middle', 'ring', 'pinky']) {
+      margin = Math.min(margin, pose.fingers[n] ? m[n] - t.up : t.down - m[n]);
+      if (margin <= 0) break;
+    }
+    if (margin <= 0) continue;
+    if (pose.fingers.thumb !== thumbOut(m, t.thumb)) continue;
+    if (t.spread != null && !(m.spread > t.spread)) continue;
+    if (margin > bestMargin) { best = pose.id; bestMargin = margin; }
+  }
+  return best;
 }
 
 function rawGesture(p, pinching) {
@@ -120,10 +155,12 @@ function rawGesture(p, pinching) {
   return 'none';
 }
 
-export async function createHandTracker(videoEl, { onUpdate, onStatus } = {}) {
+export async function createHandTracker(videoEl, { onUpdate, onStatus, tuning: initialTuning } = {}) {
   const status = (s, d) => { try { if (onStatus) onStatus(s, d); } catch (e) { console.error(e); } };
   let running = true, rafId = 0, stream = null, landmarker = null, lastVideoTime = -1;
   const states = new Map(); // 'Left' | 'Right' -> state
+  let tuning = initialTuning || DEFAULT_TUNING;
+  const setTuning = (t) => { if (t && typeof t === 'object') tuning = t; };
 
   const stop = () => {
     running = false;
@@ -193,9 +230,10 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus } = {}) {
     const hands = [];
     const taken = new Set();
     (result.landmarks || []).forEach((lms, idx) => {
-      // MediaPipe assumes a mirrored input; our frame is not mirrored, so its label is flipped for the user.
+      // MediaPipe's handedness label already matches the user's real hand for this front camera
+      // (verified by the user: flipping it reported Left/Right the wrong way round).
       const cat = result.handedness && result.handedness[idx] && result.handedness[idx][0];
-      let id = cat && cat.categoryName === 'Left' ? 'Right' : 'Left';
+      let id = cat && cat.categoryName === 'Left' ? 'Left' : 'Right';
       if (taken.has(id)) id = id === 'Left' ? 'Right' : 'Left'; // both labelled the same: give second the other id
       taken.add(id);
 
@@ -221,9 +259,11 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus } = {}) {
       const fKey = FINGER_NAMES.map((n) => (rf[n] ? 1 : 0)).join('');
       if (fKey === st.fCand) st.fN++; else { st.fCand = fKey; st.fN = 1; }
       if (st.fN >= GESTURE_FRAMES) st.fingers = rf;
-      const rawPose = classifyPose(vp, rf, st.pinch);
+      const metrics = fingerMetrics(vp);
+      const rawPose = classifyPose(vp, st.pinch, tuning, metrics);
       if (rawPose === st.pCand) st.pN++; else { st.pCand = rawPose; st.pN = 1; }
-      if (st.pN >= GESTURE_FRAMES) st.pose = st.pCand;
+      const need = DEFAULT_TUNING[st.pCand] ? tuneFor(tuning, st.pCand).frames : GESTURE_FRAMES;
+      if (st.pN >= need) st.pose = st.pCand;
 
       // Smoothed screen-space outputs.
       const pts = lms.map((l) => mapPoint(l, vw, vh, W, H));
@@ -235,6 +275,10 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus } = {}) {
         id, x: st.fx.filter(mx, t), y: st.fy.filter(my, t),
         pinch: st.pinch, pinchStrength, gesture: st.gesture, landmarks,
         fingers: { ...st.fingers }, pose: st.pose,
+        metrics: {
+          thumb: +metrics.thumb.toFixed(3), index: +metrics.index.toFixed(3), middle: +metrics.middle.toFixed(3),
+          ring: +metrics.ring.toFixed(3), pinky: +metrics.pinky.toFixed(3), spread: +metrics.spread.toFixed(3),
+        },
       });
     });
 
@@ -245,5 +289,5 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus } = {}) {
   }
   rafId = requestAnimationFrame(frame);
 
-  return { stop };
+  return { stop, setTuning };
 }
