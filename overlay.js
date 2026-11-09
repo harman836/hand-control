@@ -214,7 +214,8 @@ function updateBindings(hands, now) {
   } else if (b.action.type === 'scroll') {
     const step = SCROLL_PX / Math.max(0.1, b.action.speed || 1);
     const ticks = Math.trunc((p.y - cur.anchor.y) / step);
-    if (ticks !== 0) { cur.anchor.y += ticks * step; send({ type: 'scroll', ticks }); }
+    // Inverted (user preference): moving the hand up scrolls the other way from before.
+    if (ticks !== 0) { cur.anchor.y += ticks * step; send({ type: 'scroll', ticks: -ticks }); }
   }
 }
 
