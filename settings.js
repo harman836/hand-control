@@ -200,6 +200,33 @@ function poseSVG(id) {
 }
 
 // ---------- dev mock ----------
+/** Plausible 21-point MediaPipe-style hand (screen DIP) for the mock telemetry. */
+function fakeLandmarks(cx, cy, S, fingers, o = {}) {
+  const f = fingers || {};
+  const P = [[0, 0]];
+  const thumb = o.pinch ? [[-0.3, -0.2], [-0.55, -0.42], [-0.68, -0.66], [-0.62, -0.9]]
+    : f.thumb ? [[-0.3, -0.2], [-0.55, -0.38], [-0.75, -0.55], [-0.92, -0.72]]
+    : [[-0.3, -0.2], [-0.45, -0.42], [-0.4, -0.62], [-0.22, -0.7]];
+  P.push(...thumb);
+  const FD = [['index', -0.32, -0.92, -0.12, [0.45, 0.28, 0.24]], ['middle', -0.08, -1.0, -0.03, [0.5, 0.32, 0.26]],
+    ['ring', 0.15, -0.94, 0.06, [0.46, 0.3, 0.24]], ['pinky', 0.35, -0.8, 0.16, [0.36, 0.24, 0.2]]];
+  for (const [k, mx, my, a0, lens] of FD) {
+    const a = a0 * (o.spread ? 1.6 : 1);
+    P.push([mx, my]);
+    if (o.pinch && k === 'index') { P.push([-0.45, -1.25], [-0.6, -1.15], [-0.64, -0.96]); continue; }
+    if (f[k]) {
+      let x = mx, y = my;
+      for (const L of lens) { x += L * Math.sin(a); y -= L * Math.cos(a); P.push([x, y]); }
+    } else {
+      P.push([mx + 0.03, my - 0.28], [mx + 0.05, my - 0.12], [mx + 0.03, my - 0.02]);
+    }
+  }
+  const c = Math.cos(o.rot || 0), s = Math.sin(o.rot || 0), m = o.mirror ? -1 : 1;
+  return P.map(([x, y]) => {
+    x *= m; y += 0.55;
+    return [Math.round(cx + (x * c - y * s) * S), Math.round(cy + (x * s + y * c) * S)];
+  });
+}
 function installMock() {
   const clone = (o) => JSON.parse(JSON.stringify(o));
   let cfg = defaultConfig();
@@ -246,13 +273,17 @@ function installMock() {
     };
     if (pose !== 'none') {
       const p = poseById(pose);
+      const rx = sw * (0.56 + 0.16 * Math.sin(t * 0.7)), ry = sh * (0.52 + 0.14 * Math.sin(t * 1.1 + 1));
       hands.push({
-        id: 'Right', x: sw * (0.55 + 0.25 * Math.sin(t * 0.7)), y: sh * (0.5 + 0.28 * Math.sin(t * 1.1 + 1)),
+        id: 'Right', x: rx, y: ry,
         pose, fingers: p ? { ...p.fingers } : {}, pinch: pose === 'pinch', pinchStrength: pose === 'pinch' ? 0.9 : 0.1,
         metrics: fakeMetrics(p && p.fingers, pose === 'open'),
+        lm: fakeLandmarks(rx, ry, sh * 0.2, p && p.fingers, { pinch: pose === 'pinch', spread: pose === 'open', rot: 0.18 * Math.sin(t * 0.9), mirror: false }),
       });
       if (pose === 'open' || pose === 'L') {
-        hands.push({ id: 'Left', x: sw * (0.25 + 0.08 * Math.sin(t)), y: sh * 0.6, pose: 'fist', fingers: { ...poseById('fist').fingers }, pinch: false, pinchStrength: 0, metrics: fakeMetrics(poseById('fist').fingers, false) });
+        const lx = sw * (0.26 + 0.06 * Math.sin(t)), ly = sh * 0.6;
+        hands.push({ id: 'Left', x: lx, y: ly, pose: 'fist', fingers: { ...poseById('fist').fingers }, pinch: false, pinchStrength: 0, metrics: fakeMetrics(poseById('fist').fingers, false),
+          lm: fakeLandmarks(lx, ly, sh * 0.18, poseById('fist').fingers, { rot: -0.1 + 0.08 * Math.sin(t * 1.3), mirror: true }) });
       }
     }
     const b = cfg.bindings.find((x) => x.enabled && x.pose === pose && (x.hand === 'any' || x.hand === 'Right'));
@@ -372,7 +403,7 @@ function renderList() {
   }
   list.innerHTML = cfg.bindings.map((b) => {
     const c = conflicts.get(b.id);
-    const handTag = b.hand === 'any' ? 'Either hand' : b.hand + ' hand';
+    const handTag = b.hand === 'any' ? 'Either' : b.hand;
     return `<div class="row${b.enabled ? '' : ' off'}${b.id === editingId ? ' selected' : ''}" role="listitem button" tabindex="0" data-id="${esc(b.id)}" aria-label="Edit ${esc(b.name)}">
       <button class="switch" role="switch" aria-checked="${b.enabled}" data-toggle="${esc(b.id)}" aria-label="Enable ${esc(b.name)}"><i></i></button>
       <div class="pose-icon" title="${esc(poseLabel(b.pose))}">${poseSVG(b.pose)}</div>
@@ -455,12 +486,13 @@ function renderEditor() {
   const usedPoses = new Set(cfg.bindings.filter((x) => x.enabled && x.id !== b.id).map((x) => x.pose));
   const continuous = CONTINUOUS.has(a.type);
   body.innerHTML = `
-    <div class="sheet-head">
+    <div class="ed-head">
+      <button class="btn ghost icon-btn" data-ed="close" aria-label="Back to gestures"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12.5 4.5L7 10l5.5 5.5"/></svg></button>
       <div class="pose-icon">${poseSVG(b.pose)}</div>
       <h3 id="edTitle">${esc(b.name || 'Gesture')}</h3>
       <button class="switch" role="switch" aria-checked="${b.enabled}" data-ed="enabled" aria-label="Enabled"></button>
-      <button class="btn ghost icon-btn" data-ed="close" aria-label="Close editor">×</button>
     </div>
+    <div class="scroll ed-scroll" id="edScroll">
     ${conflicts ? `<div class="warnbox" role="alert"><span aria-hidden="true">⚠</span><span><b>Overlaps with ${esc(conflicts.map((x) => '“' + x.name + '”').join(', '))}.</b> Both use ${esc(poseLabel(b.pose))} for the same hand — only one will fire. Change the pose or hand, or disable one.</span></div>` : ''}
     <div class="field"><label for="ed-name">Name</label>
       <input class="field-input" id="ed-name" data-ed="name" value="${esc(b.name)}" maxlength="48" autocomplete="off"></div>
@@ -484,7 +516,8 @@ function renderEditor() {
       </div>
     </div>
     ${actionFields(a)}
-    <div class="sheet-foot">
+    </div>
+    <div class="ed-foot">
       <div class="test-result" id="testResult" aria-live="polite"></div>
       <button class="btn primary" data-ed="test"${a.type === 'none' ? ' disabled' : ''}>Test action</button>
       <button class="btn" data-ed="dup">Duplicate</button>
@@ -494,6 +527,7 @@ function renderEditor() {
         : `<button class="btn ghost danger" data-ed="del">Delete</button>`}
     </div>`;
   $('#sheet [data-ed="enabled"]').innerHTML = '<i></i>';
+  updateFades();
 }
 function edRange(f, label, min, max, step, val, fmt) {
   return `<div class="field"><label for="ed-${f}">${label}<output id="edo-${f}">${fmt(val)}</output></label>
@@ -534,28 +568,31 @@ function actionFields(a) {
 }
 
 function openEditor(id) {
+  if (openPanelName !== 'gestures') openPanel('gestures');
   editingId = id; deleteArmed = false; stopRecording(false);
   renderEditor(); renderList();
-  const sheet = $('#sheet');
-  sheet.classList.add('open'); sheet.setAttribute('aria-hidden', 'false');
-  $('#scrim').classList.add('open');
+  $('#sheet').setAttribute('aria-hidden', 'false');
+  $('.view-list').setAttribute('aria-hidden', 'true');
+  $('#gestureViews').classList.add('editing');
   setTimeout(() => { const n = $('#ed-name'); n && n.focus({ preventScroll: true }); }, 60);
 }
-function closeEditor() {
+function closeEditor(focusRow = true) {
   const prev = editingId;
   editingId = null; deleteArmed = false; stopRecording(false);
-  const sheet = $('#sheet');
-  sheet.classList.remove('open'); sheet.setAttribute('aria-hidden', 'true');
-  $('#scrim').classList.remove('open');
+  $('#sheet').setAttribute('aria-hidden', 'true');
+  $('.view-list').setAttribute('aria-hidden', 'false');
+  $('#gestureViews').classList.remove('editing');
   renderList();
-  const row = prev && document.querySelector(`.row[data-id="${CSS.escape(prev)}"]`);
+  updateFades();
+  const row = focusRow && prev && document.querySelector(`.row[data-id="${CSS.escape(prev)}"]`);
   row && row.focus({ preventScroll: true });
 }
 function refreshAfterEdit(rerenderEditor = true) {
   if (rerenderEditor) {
-    const sc = $('#sheetBody').scrollTop;
+    const sc = $('#edScroll') ? $('#edScroll').scrollTop : 0;
     renderEditor();
-    $('#sheetBody').scrollTop = sc;
+    if ($('#edScroll')) $('#edScroll').scrollTop = sc;
+    updateFades();
   }
   renderList();
   scheduleSave();
@@ -685,39 +722,67 @@ function renderPower(on) {
 }
 const fingerList = (f) => f ? ['thumb', 'index', 'middle', 'ring', 'pinky'].filter((k) => f[k]) : [];
 
-// ---------- live camera feed + skeleton ----------
-// The overlay's landmarks are in screen DIP, cover-fitted to the screen's aspect. Giving the stage the
-// same aspect and cover-fitting this video the same way makes them line up after dividing by screen size.
+// ---------- live camera feed (content layer) + skeleton ----------
+// The camera fills the whole window (mirrored, cover-fit). Preview only: low resolution and frame rate,
+// and released whenever the window is hidden/minimized.
+function setCamState(state, title, text) {
+  const b = document.body;
+  b.classList.toggle('cam-on', state === 'on');
+  b.classList.toggle('cam-wait', state === 'wait');
+  b.classList.toggle('cam-off', state === 'off');
+  if (title != null) $('#camMsgTitle').textContent = title;
+  if (text != null) $('#camMsgText').textContent = text;
+}
 (function initStageCam() {
-  const stage = $('#stage'), video = $('#stageCam');
-  if (!stage || !video) return;
-  stage.style.aspectRatio = `${screen.width || 16} / ${screen.height || 9}`;
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
-  // Preview only: low resolution and frame rate, and released whenever the window is hidden/minimized.
+  const video = $('#stageCam');
+  if (!video) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setCamState('off', 'Camera preview unavailable', 'This window can’t open the camera. Gestures keep working.');
+    return;
+  }
   let stream = null, opening = false;
   const start = () => {
     if (stream || opening || document.hidden) return;
     opening = true;
-    navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 480 }, height: { ideal: 270 }, frameRate: { ideal: 20, max: 24 }, facingMode: 'user' }, audio: false })
+    setCamState('wait', 'Starting camera…', 'The preview appears here. Gestures keep working either way.');
+    navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 480, max: 480 }, height: { ideal: 270, max: 270 }, frameRate: { ideal: 20, max: 24 }, facingMode: 'user' }, audio: false })
       .then((s) => {
         opening = false;
         if (document.hidden) { s.getTracks().forEach((tr) => tr.stop()); return; }
         stream = s; video.srcObject = s; video.play().catch(() => {});
-        stage.classList.add('cam-on');
+        setCamState('on');
+        // the device can be lost or taken by another app: drop the dead stream and retry on next focus
+        s.getVideoTracks().forEach((tr) => tr.addEventListener('ended', () => {
+          if (stream !== s) return;
+          stream = null; video.srcObject = null;
+          setCamState('off', 'Camera disconnected', 'The preview stopped. It retries when you return to this window.');
+        }));
       })
-      .catch((err) => { opening = false; console.warn('Live view camera unavailable:', err && err.name); });
+      .catch((err) => {
+        opening = false;
+        const n = err && err.name;
+        console.warn('Live view camera unavailable:', n);
+        const why = n === 'NotAllowedError' ? ['Camera access is blocked', 'Allow camera access to see the live preview. Gestures keep working.']
+          : n === 'NotFoundError' || n === 'OverconstrainedError' ? ['No camera found', 'Connect a camera to see the live preview.']
+          : n === 'NotReadableError' ? ['Camera is busy', 'Another app is using the camera, so the preview is off.']
+          : ['Camera preview unavailable', 'The preview couldn’t start. Gestures keep working.'];
+        setCamState('off', why[0], why[1]);
+      });
   };
   const stopCam = () => {
     if (stream) stream.getTracks().forEach((tr) => tr.stop());
-    stream = null; video.srcObject = null; stage.classList.remove('cam-on');
+    stream = null; video.srcObject = null;
+    if (document.body.classList.contains('cam-on')) setCamState('wait');
   };
+  video.addEventListener('loadedmetadata', () => drawSkeletons(lastHands));
   document.addEventListener('visibilitychange', () => (document.hidden ? stopCam() : start()));
+  window.addEventListener('focus', start);
   window.addEventListener('beforeunload', stopCam);
   start();
 })();
 
-// Pause the drifting backdrop (it forces every glass panel to re-blur each frame) unless the window is focused.
-(function idleBackdrop() {
+// Pause decorative animation unless the window is focused.
+(function idleWatch() {
   const set = () => document.documentElement.classList.toggle('idle', document.hidden || !document.hasFocus());
   window.addEventListener('focus', set); window.addEventListener('blur', set);
   document.addEventListener('visibilitychange', set);
@@ -726,35 +791,60 @@ const fingerList = (f) => f ? ['thumb', 'index', 'middle', 'ring', 'pinky'].filt
 
 const BONES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
   [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
-function drawSkeletons(hands, sw, sh) {
+let lastHands = [];
+/** Landmarks are in primary-screen DIP, cover-fitted to the screen and mirrored; re-map them to this
+ *  window's own cover-fit of the same frame. */
+function lmMapper() {
+  const v = $('#stageCam');
+  const vw = (v && v.videoWidth) || 16, vh = (v && v.videoHeight) || 9;
+  const SW = Math.max(screen.width || 1920, 1), SH = Math.max(screen.height || 1080, 1);
+  const W = window.innerWidth, H = window.innerHeight;
+  const s1 = Math.max(SW / vw, SH / vh), ox1 = (SW - vw * s1) / 2, oy1 = (SH - vh * s1) / 2;
+  const s2 = Math.max(W / vw, H / vh), ox2 = (W - vw * s2) / 2, oy2 = (H - vh * s2) / 2;
+  return ([x, y]) => [((x - ox1) / (vw * s1)) * vw * s2 + ox2, ((y - oy1) / (vh * s1)) * vh * s2 + oy2];
+}
+function drawSkeletons(hands) {
   const cv = $('#stageSkel');
   if (!cv) return;
-  const W = cv.clientWidth, H = cv.clientHeight, dpr = window.devicePixelRatio || 1;
+  const W = window.innerWidth, H = window.innerHeight, dpr = window.devicePixelRatio || 1;
   if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
     cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
   }
   const ctx = cv.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, W, H);
+  if (!hands || !hands.length) return;
+  const map = lmMapper();
   for (const h of hands) {
     if (!Array.isArray(h.lm) || h.lm.length < 21) continue;
-    const pts = h.lm.map(([x, y]) => [x / sw * W, y / sh * H]);
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = 'rgba(255,255,255,0.85)'; ctx.lineWidth = 2.5;
-    ctx.shadowColor = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = 4;
+    const pts = h.lm.map(map);
+    const span = Math.hypot(pts[0][0] - pts[9][0], pts[0][1] - pts[9][1]);
+    const k = clamp(span / 110, 0.7, 1.6); // scale strokes with hand size on screen
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    // soft dark under-stroke for legibility over bright scenes
+    ctx.strokeStyle = 'rgba(0,0,0,0.28)'; ctx.lineWidth = 6 * k;
     ctx.beginPath();
     for (const [a, b] of BONES) { ctx.moveTo(...pts[a]); ctx.lineTo(...pts[b]); }
     ctx.stroke();
-    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(255,255,255,0.88)'; ctx.lineWidth = 2.6 * k;
+    ctx.stroke();
     for (let i = 0; i < 21; i++) {
       const tip = i === 4 || i === 8 || i === 12 || i === 16 || i === 20;
-      ctx.fillStyle = tip ? 'rgba(120,170,255,0.95)' : 'rgba(255,255,255,0.95)';
-      ctx.beginPath(); ctx.arc(pts[i][0], pts[i][1], tip ? 4 : 2.6, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(pts[i][0], pts[i][1], (tip ? 4.6 : 3) * k, 0, Math.PI * 2);
+      ctx.fillStyle = tip ? 'rgba(140,190,255,1)' : '#fff'; ctx.fill();
+      if (tip) { ctx.lineWidth = 1.6 * k; ctx.strokeStyle = 'rgba(255,255,255,0.95)'; ctx.stroke(); }
+    }
+    if (h.pinch) {
+      const mx = (pts[4][0] + pts[8][0]) / 2, my = (pts[4][1] + pts[8][1]) / 2;
+      ctx.beginPath(); ctx.arc(mx, my, 9 * k, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(76,148,255,0.35)'; ctx.fill();
+      ctx.beginPath(); ctx.arc(mx, my, 4.5 * k, 0, Math.PI * 2);
+      ctx.fillStyle = '#4c94ff'; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = '#fff'; ctx.stroke();
     }
   }
 }
+window.addEventListener('resize', () => drawSkeletons(lastHands));
 
-const markers = new Map();
 function renderTelemetry(t) {
   telem = t;
   // status chips
@@ -771,51 +861,19 @@ function renderTelemetry(t) {
     setSwitch($('#pauseSwitch'), !!t.paused);
   }
 
-  // hands on stage
-  const stage = $('#stage');
+  // skeletons over the camera (no per-hand markers — pose info lives in the HUD)
   const hands = Array.isArray(t.hands) ? t.hands : [];
-  stage.classList.toggle('has-hands', hands.length > 0);
-  const sw = Math.max(screen.width || 1920, 1), sh = Math.max(screen.height || 1080, 1);
-  const W = stage.clientWidth, H = stage.clientHeight;
-  const seen = new Set();
-  hands.forEach((h, i) => {
-    const key = h.id ?? ('h' + i);
-    seen.add(key);
-    let m = markers.get(key);
-    if (!m) {
-      m = document.createElement('div');
-      m.className = 'hand-marker';
-      m.innerHTML = '<div class="hand-bubble"><span class="g"></span><i class="pinch-dot"></i></div><span class="tag"></span>';
-      stage.appendChild(m); markers.set(key, m);
-    }
-    const x = clamp((+h.x || 0) / sw, 0, 1) * W, y = clamp((+h.y || 0) / sh, 0, 1) * H;
-    m.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
-    const isLeft = /left/i.test(String(h.id));
-    m.classList.toggle('left', isLeft);
-    m.classList.toggle('pinch', !!h.pinch);
-    const pose = h.pose || 'none';
-    const sig = pose + '|' + fingerList(h.fingers).join(',') + '|' + !!h.pinch;
-    if (m.dataset.sig !== sig) {
-      m.dataset.sig = sig;
-      const known = poseById(pose);
-      m.querySelector('.g').innerHTML = pose === 'pinch' || h.pinch ? poseSVG('pinch')
-        : known && known.fingers ? poseSVG(pose) : handSVG(h.fingers || null);
-      m.querySelector('.tag').textContent = (h.id ? h.id + ' · ' : '') + (pose === 'none' ? fingerList(h.fingers).length + ' up' : poseLabel(pose));
-    }
-  });
-  for (const [k, m] of markers) if (!seen.has(k)) { m.remove(); markers.delete(k); }
-  drawSkeletons(hands, sw, sh);
+  document.body.classList.toggle('has-hands', hands.length > 0);
+  lastHands = hands;
+  drawSkeletons(hands);
 
-  // readout
+  // HUD readout
   const active = t.activeBinding ? cfg && cfg.bindings.find((b) => b.id === t.activeBinding) : null;
   const focusHand = (active && hands.find((h) => h.pose === active.pose)) || hands.find((h) => h.id === (cfg && cfg.primaryHand)) || hands[0];
   const pose = focusHand ? (focusHand.pinch ? 'pinch' : focusHand.pose || 'none') : null;
-  const ringIcon = $('#ringIcon');
-  if (ringIcon.dataset.pose !== String(pose)) {
-    ringIcon.dataset.pose = String(pose);
-    ringIcon.innerHTML = pose ? (poseById(pose) && poseById(pose).fingers ? poseSVG(pose) : handSVG(focusHand.fingers || null)) : handSVG(null);
-  }
-  $('#poseName').textContent = !hands.length ? 'No hands' : pose === 'none' ? 'No pose' : poseLabel(pose);
+  const handTxt = focusHand && focusHand.id ? focusHand.id + ' · ' : '';
+  $('#poseName').textContent = !hands.length ? 'No hands in view'
+    : handTxt + (pose === 'none' ? fingerList(focusHand.fingers).length + ' fingers up' : poseLabel(pose));
   const bn = $('#bindingName');
   if (!hands.length) bn.textContent = 'Hold a hand up to the camera';
   else if (active) bn.innerHTML = `→ <b>${esc(active.name)}</b>`;
@@ -846,6 +904,134 @@ function renderTelemetry(t) {
 
   markLiveRow();
   updateTuneMeter();
+}
+
+// ---------- pop-out panels ----------
+let openPanelName = null, panelAnim = null;
+const REDUCED = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+// spring-like easing (slight overshoot), with a cubic-bezier fallback for engines without linear()
+const SPRING = (() => {
+  const e = 'linear(0, 0.009, 0.035 2.1%, 0.141 4.4%, 0.723 12.9%, 0.938 16.7%, 1.017 20.4%, 1.043 24%, 1.035 28.4%, 1.007 37.9%, 0.996 47.3%, 1)';
+  return CSS.supports('transition-timing-function', e) ? e : 'cubic-bezier(0.3, 1.3, 0.5, 1)';
+})();
+const panelEl = (name) => document.getElementById('panel-' + name);
+const dockBtn = (name) => document.querySelector(`.dock-btn[data-open="${name}"]`);
+
+/** Morph a panel out of (or back into) its dock button: clip-path from the button's rect + content blur/fade. */
+function morph(panel, btn, opening) {
+  if (panelAnim) { panelAnim.forEach((a) => a.cancel()); panelAnim = null; }
+  const body = panel.querySelector('.panel-body');
+  if (REDUCED() || !btn || !panel.animate) {
+    const a = panel.animate ? panel.animate([{ opacity: opening ? 0 : 1 }, { opacity: opening ? 1 : 0 }], { duration: 160, easing: 'ease-out', fill: 'forwards' }) : null;
+    return a ? a.finished.catch(() => {}) : Promise.resolve();
+  }
+  const pr = panel.getBoundingClientRect(), br = btn.getBoundingClientRect();
+  const R = parseFloat(getComputedStyle(panel).borderTopLeftRadius) || 30;
+  const from = `inset(${br.top - pr.top}px ${pr.right - br.right}px ${pr.bottom - br.bottom}px ${br.left - pr.left}px round ${br.height / 2}px)`;
+  const E = 80; // final clip extends past the panel so its own shadow isn't cut
+  const to = `inset(${-E}px round ${R + E}px)`;
+  const frames = [{ clipPath: from, opacity: 0.6 }, { clipPath: to, opacity: 1 }];
+  const content = [{ opacity: 0, filter: 'blur(8px)', transform: 'scale(0.96)' }, { opacity: 1, filter: 'blur(0)', transform: 'none' }];
+  const dur = opening ? 520 : 300;
+  const opt = { duration: dur, easing: opening ? SPRING : 'cubic-bezier(0.4, 0, 0.7, 0.2)', fill: 'forwards' };
+  const a1 = panel.animate(opening ? frames : frames.slice().reverse(), opt);
+  const a2 = body.animate(opening ? content : content.slice().reverse(),
+    { duration: opening ? 300 : 180, delay: opening ? 90 : 0, easing: 'ease-out', fill: 'both' });
+  panelAnim = [a1, a2];
+  return a1.finished.then(() => { if (opening) { a1.cancel(); a2.cancel(); } panelAnim = null; }).catch(() => {});
+}
+function openPanel(name) {
+  if (openPanelName === name) return;
+  if (openPanelName) closePanel(true);
+  const panel = panelEl(name), btn = dockBtn(name);
+  if (!panel) return;
+  openPanelName = name;
+  panel.hidden = false;
+  document.body.classList.add('panel-open');
+  btn && btn.setAttribute('aria-expanded', 'true');
+  if (name === 'tuning') { renderTuning(); }
+  updateFades();
+  morph(panel, btn, true);
+  panel.tabIndex = -1;
+  panel.focus({ preventScroll: true });
+}
+function closePanel(instant = false) {
+  const name = openPanelName; if (!name) return;
+  const panel = panelEl(name), btn = dockBtn(name);
+  openPanelName = null;
+  if (name === 'gestures' && editingId) closeEditor(false);
+  if (name === 'gestures' && resetArmed) { resetArmed = false; renderBindActions(); }
+  if (name === 'tuning' && tuneResetArmed) { tuneResetArmed = false; renderTuneActions(); }
+  btn && btn.setAttribute('aria-expanded', 'false');
+  document.body.classList.remove('panel-open');
+  if (instant) { if (panelAnim) panelAnim.forEach((a) => a.cancel()); panelAnim = null; panel.hidden = true; return; }
+  morph(panel, btn, false).then(() => {
+    if (openPanelName !== name) { panel.hidden = true; panel.getAnimations().forEach((a) => a.cancel()); panel.querySelector('.panel-body').getAnimations().forEach((a) => a.cancel()); }
+  });
+  if (panel.contains(document.activeElement) && btn) btn.focus({ preventScroll: true });
+}
+
+// soft fades at the scroll edges of panel contents
+function updateFade(el) {
+  el.classList.toggle('fade-top', el.scrollTop > 2);
+  el.classList.toggle('fade-bottom', el.scrollTop + el.clientHeight < el.scrollHeight - 2);
+}
+function updateFades() { requestAnimationFrame(() => document.querySelectorAll('.panel:not([hidden]) .scroll').forEach(updateFade)); }
+document.addEventListener('scroll', (e) => { if (e.target.classList && e.target.classList.contains('scroll')) updateFade(e.target); }, true);
+window.addEventListener('resize', updateFades);
+
+// ---------- Liquid Glass edge lensing (small elements only) ----------
+// Each lensed element gets its own feDisplacementMap whose map is drawn from a rounded-rect SDF:
+// pixels within a band of the edge are displaced along the edge normal, bending the backdrop like a lens rim.
+function initLens() {
+  const ua = navigator.userAgent;
+  if (!/Chrome\//.test(ua) || window.matchMedia('(prefers-reduced-transparency: reduce)').matches) return;
+  const defs = $('#lensDefs'); if (!defs) return;
+  const NS = 'http://www.w3.org/2000/svg';
+  const build = (el) => {
+    const w = Math.round(el.offsetWidth), h = Math.round(el.offsetHeight);
+    if (w < 4 || h < 4) return;
+    const key = w + 'x' + h; if (el.dataset.lensKey === key) return;
+    el.dataset.lensKey = key;
+    const id = 'lens-' + el.dataset.lens;
+    const sc = 0.5, cw = Math.max(2, Math.round(w * sc)), ch = Math.max(2, Math.round(h * sc));
+    const cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
+    const ctx = cv.getContext('2d'); const img = ctx.createImageData(cw, ch);
+    const r = Math.min(h / 2, parseFloat(getComputedStyle(el).borderTopLeftRadius) || h / 2);
+    const band = Math.min(14, h / 2.5);
+    for (let j = 0; j < ch; j++) for (let i = 0; i < cw; i++) {
+      const x = (i + 0.5) / sc - w / 2, y = (j + 0.5) / sc - h / 2;
+      // signed distance to rounded rect, and its gradient
+      const qx = Math.abs(x) - (w / 2 - r), qy = Math.abs(y) - (h / 2 - r);
+      const ax = Math.max(qx, 0), ay = Math.max(qy, 0), len = Math.hypot(ax, ay);
+      const d = len + Math.min(Math.max(qx, qy), 0) - r;
+      let nx, ny;
+      if (len > 0) { nx = ax / len; ny = ay / len; } else if (qx > qy) { nx = 1; ny = 0; } else { nx = 0; ny = 1; }
+      nx *= Math.sign(x) || 1; ny *= Math.sign(y) || 1;
+      const t = clamp(1 + d / band, 0, 1), m = t * t; // 0 inside, ramps to 1 at the rim
+      const o = (j * cw + i) * 4;
+      img.data[o] = 128 + nx * m * 127; img.data[o + 1] = 128 + ny * m * 127; img.data[o + 2] = 128; img.data[o + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    let f = document.getElementById(id);
+    if (!f) {
+      f = document.createElementNS(NS, 'filter');
+      f.setAttribute('id', id); f.setAttribute('color-interpolation-filters', 'sRGB');
+      f.setAttribute('x', '0'); f.setAttribute('y', '0'); f.setAttribute('width', '100%'); f.setAttribute('height', '100%');
+      f.setAttribute('filterUnits', 'userSpaceOnUse'); f.setAttribute('primitiveUnits', 'userSpaceOnUse');
+      f.innerHTML = `<feImage result="map" preserveAspectRatio="none"/><feDisplacementMap in="SourceGraphic" in2="map" scale="18" xChannelSelector="R" yChannelSelector="G"/>`;
+      defs.appendChild(f);
+    }
+    f.setAttribute('width', w); f.setAttribute('height', h);
+    const fi = f.querySelector('feImage');
+    fi.setAttribute('x', 0); fi.setAttribute('y', 0); fi.setAttribute('width', w); fi.setAttribute('height', h);
+    fi.setAttribute('href', cv.toDataURL());
+    el.style.setProperty('--lens', `url(#${id})`);
+  };
+  const els = [...document.querySelectorAll('.lensed[data-lens]')];
+  const ro = new ResizeObserver((entries) => entries.forEach((e) => build(e.target)));
+  els.forEach((el) => { build(el); ro.observe(el); });
+  document.documentElement.classList.add('lens-ok');
 }
 
 // ---------- pose tuning ----------
@@ -938,6 +1124,7 @@ function renderTuning() {
 
 function renderMeterRows() {
   const rows = $('#meterRows'); if (!rows) return;
+  lastMatchText = '';
   rows.innerHTML = tuneRequirements(tuneSel).map((r) => `
     <div class="meter na" data-k="${r.k}">
       <div class="meter-label"><b>${FINGER_LABEL[r.k]}</b><span class="meter-req">${reqText(r)}</span><output>—</output></div>
@@ -1097,9 +1284,23 @@ function wire() {
   sheet.addEventListener('click', onSheetClick);
   sheet.addEventListener('input', onSheetInput);
   sheet.addEventListener('change', onSheetChange);
-  $('#scrim').addEventListener('click', closeEditor);
   document.addEventListener('pointerdown', (e) => { if (recording && !e.target.closest('#rec')) stopRecording(true); }, true);
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !recording && editingId) closeEditor(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || recording) return;
+    if (editingId) closeEditor();
+    else if (openPanelName) closePanel();
+  });
+  // dock: one panel at a time; clicking the open one again closes it
+  $('#dock').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-open]'); if (!b) return;
+    if (openPanelName === b.dataset.open) closePanel(); else openPanel(b.dataset.open);
+  });
+  // clicking the camera (content layer) closes any open panel
+  document.addEventListener('pointerdown', (e) => {
+    if (!openPanelName || recording) return;
+    if (e.target.closest('.panel, .dock, .topbar, .hud, .fired')) return;
+    closePanel();
+  });
 
   $('#powerSwitch').addEventListener('click', () => {
     const on = $('#powerSwitch').getAttribute('aria-checked') !== 'true';
@@ -1120,6 +1321,7 @@ async function init() {
   if (!window.hand) installMock();
   $('#brandMark').innerHTML = handSVG(FALLBACK_POSES[0].fingers, { spread: true });
   wire();
+  initLens();
   await loadPoses();
   try { cfg = sanitizeConfig(await call('getConfig')); }
   catch (e) { console.error('[settings] getConfig failed', e); cfg = defaultConfig(); }
