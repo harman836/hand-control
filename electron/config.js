@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 
 const VERSION = 2;
-const POSE_IDS = ['open', 'fist', 'point', 'two', 'three', 'four', 'thumb', 'rock', 'call', 'L', 'pinky', 'pinch', 'none'];
+const POSE_IDS = ['open', 'fist', 'point', 'two', 'three', 'thumb', 'rock', 'call', 'L', 'pinky', 'pinch', 'none'];
 const HANDS = ['any', 'Left', 'Right'];
 const MEDIA_KEYS = ['playpause', 'next', 'prev', 'volup', 'voldown', 'mute'];
 const MOUSE_BUTTONS = ['right', 'double', 'middle'];
@@ -123,7 +123,6 @@ const POSES = [
   { id: 'point', label: 'Point', fingers: F(0, 1, 0, 0, 0) },
   { id: 'two', label: 'Two (V)', fingers: F(0, 1, 1, 0, 0) },
   { id: 'three', label: 'Three', fingers: F(0, 1, 1, 1, 0) },
-  { id: 'four', label: 'Four', fingers: F(0, 1, 1, 1, 1) },
   { id: 'thumb', label: 'Thumbs up', fingers: F(1, 0, 0, 0, 0) },
   { id: 'rock', label: 'Rock', fingers: F(0, 1, 0, 0, 1) },
   { id: 'call', label: 'Call me', fingers: F(1, 0, 0, 0, 1) },

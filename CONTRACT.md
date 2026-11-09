@@ -17,7 +17,6 @@ Built-in pose ids (pinch still wins as gesture/pose 'pinch'):
 | `point` | index |
 | `two` | index + middle (V) |
 | `three` | index + middle + ring |
-| `four` | index + middle + ring + pinky, thumb tucked |
 | `thumb` | thumb only (thumbs up) |
 | `rock` | index + pinky |
 | `call` | thumb + pinky |

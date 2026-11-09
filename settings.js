@@ -9,7 +9,6 @@ const FALLBACK_POSES = [
   { id: 'point', label: 'Point',      fingers: { thumb: false, index: true,  middle: false, ring: false, pinky: false } },
   { id: 'two',   label: 'Two (V)',    fingers: { thumb: false, index: true,  middle: true,  ring: false, pinky: false } },
   { id: 'three', label: 'Three',      fingers: { thumb: false, index: true,  middle: true,  ring: true,  pinky: false } },
-  { id: 'four',  label: 'Four',       fingers: { thumb: false, index: true,  middle: true,  ring: true,  pinky: true } },
   { id: 'thumb', label: 'Thumbs up',  fingers: { thumb: true,  index: false, middle: false, ring: false, pinky: false } },
   { id: 'rock',  label: 'Rock',       fingers: { thumb: false, index: true,  middle: false, ring: false, pinky: true } },
   { id: 'call',  label: 'Call me',    fingers: { thumb: true,  index: false, middle: false, ring: false, pinky: true } },

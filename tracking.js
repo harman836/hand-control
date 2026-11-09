@@ -96,7 +96,6 @@ export const POSES = [
   { id: 'point', label: 'Point',       fingers: F('index') },
   { id: 'two',   label: 'Two (V)',     fingers: F('index', 'middle') },
   { id: 'three', label: 'Three',       fingers: F('index', 'middle', 'ring') },
-  { id: 'four',  label: 'Four',        fingers: F('index', 'middle', 'ring', 'pinky') },
   { id: 'thumb', label: 'Thumbs up',   fingers: F('thumb') },
   { id: 'rock',  label: 'Rock',        fingers: F('index', 'pinky') },
   { id: 'call',  label: 'Call me',     fingers: F('thumb', 'pinky') },
