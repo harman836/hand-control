@@ -104,10 +104,9 @@ h1, h2, h3 { margin: 0; letter-spacing: -0.01em; }
 }
 /* SVG edge lensing on small elements only (enabled from JS on Chromium) */
 .lens-ok .lensed { -webkit-backdrop-filter: var(--lens) var(--blur-small); backdrop-filter: var(--lens) var(--blur-small); }
-@supports (corner-shape: squircle) {
-  .panel, .row, .field-input, .pose-btn, .tune-meter, .rec, .box-frame, .warnbox { corner-shape: squircle; }
-  :root { --r-panel: 44px; --r-in: 30px; }
-}
+/* No corner-shape: squircle — Chromium still clips backdrop-filter, box-shadow and the rim mask with plain
+   round corners, so squircle panels showed blur/rim poking out at the corners. Plain radii everywhere,
+   concentric (inner = outer - padding). */
 
 /* ---------- top bar ---------- */
 .topbar {
@@ -249,6 +248,7 @@ h1, h2, h3 { margin: 0; letter-spacing: -0.01em; }
   position: fixed; z-index: 11; left: 0; right: 0; margin-inline: auto; bottom: var(--dock-zone);
   width: min(460px, calc(100vw - 24px)); max-height: var(--pmax);
   border-radius: var(--r-panel); display: flex; flex-direction: column;
+  overflow: clip; /* keep scroll areas, sliding views and the rim inside the same rounded corners */
   background: var(--tint-panel);
   -webkit-backdrop-filter: var(--blur-panel); backdrop-filter: var(--blur-panel);
   box-shadow: var(--glass-shadow), 0 30px 70px -24px rgba(0, 0, 0, 0.6);
