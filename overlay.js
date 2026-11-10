@@ -17,7 +17,9 @@ const hint = document.getElementById('hint');
 const DRAG_MOVE = 0.02;        // normalised move during pinch that starts a drag early
 const PRE_FREEZE = 0.5;        // pinchStrength above this (not yet pinched) freezes the cursor...
 const PRE_FREEZE_MAX_MS = 300; // ...for at most this long
-const SCROLL_PX = 28;          // vertical palm movement (px) per wheel notch at speed 1
+const SCROLL_PX = 28;          // vertical palm movement (px) per wheel notch (120 units) at speed 1
+const SCROLL_DEADZONE = 6;     // px the palm must move after engaging before scrolling starts
+const SCROLL_MIN_UNITS = 6;    // smallest wheel delta sent (sub-notch deltas = smooth scrolling in modern apps)
 const MOVE_EPS = 0.0004;       // ignore sub-pixel jitter
 const DROPOUT_MS = 150;        // a binding's pose may vanish this long without releasing
 const TELEMETRY_MS = 33;       // ~30 Hz to Settings (only while it is open)
@@ -28,7 +30,9 @@ const CONTINUOUS = new Set(['moveWindow', 'scroll']);
 const st = { enabled: false, paused: true, mouseOk: true, mouseError: null, settingsOpen: false, track: 'camera', trackDetail: '' };
 let cfg = {
   primaryHand: 'Right', comfortBox: { w: 0.7, h: 0.6 }, cursorSmoothing: 0.5, clickMaxMs: 250, bindings: [],
+  clickFinger: 'index', rightClickFinger: 'none', cursorAnchor: 'pinch', twoHands: false,
 };
+let wasRPinch = false;
 let wasPinch = false, pinchStart = 0, pinchPos = null, dragging = false, pinchIgnored = false;
 let preFreezeStart = 0;
 let lastSent = null, cursor = null, smooth = null, hadHand = false;
@@ -74,10 +78,14 @@ function holdProgress() {
   return ms <= 0 ? 1 : clamp01((performance.now() - cur.since) / ms);
 }
 
+// Only the area around the cursor is ever painted, so only that is cleared (a full-screen clear at
+// high DPI every frame was a large share of the overlay's GPU cost).
+let dirty = null;
 function draw() {
-  ctx.clearRect(0, 0, innerWidth, innerHeight);
+  if (dirty) { ctx.clearRect(dirty.x - 34, dirty.y - 34, 68, 68); dirty = null; }
   if (!cursor || !st.enabled) return;
   const x = cursor.u * innerWidth, y = cursor.v * innerHeight;
+  dirty = { x, y };
   const on = active();
   const engagedType = cur && cur.engaged ? cur.b.action.type : null;
   const color = !on ? '#a3acbb' : dragging ? '#fb923c' : engagedType === 'moveWindow' ? '#c4b5fd' : engagedType === 'scroll' ? '#93c5fd' : '#5eead4';
@@ -91,9 +99,7 @@ function draw() {
   ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(255,255,255,0.45)';
   ctx.beginPath(); ctx.arc(x, y, r + 3, 0, Math.PI * 2); ctx.stroke();
   ctx.lineWidth = 2.5; ctx.strokeStyle = color;
-  ctx.shadowColor = color; ctx.shadowBlur = on ? 10 : 0;
   ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
-  ctx.shadowBlur = 0;
   if (small) { ctx.fillStyle = color; ctx.globalAlpha = 0.35; ctx.fill(); }
 
   // Hold progress for the pending binding.
@@ -133,7 +139,7 @@ function renderChip() {
   } else {
     chip.classList.add('active');
     text = dragging ? 'Dragging' : hadHand ? 'Active' : 'Active - no hand';
-    sub = 'pinch click/drag | Ctrl+Alt+P pause';
+    sub = `${cfg.clickFinger || 'index'} pinch click/drag | Ctrl+Alt+P pause`;
   }
   label.textContent = text;
   hint.textContent = sub;
@@ -174,7 +180,7 @@ function updateBindings(hands, now) {
   if (!cur) {
     for (const b of cfg.bindings) {
       const h = findMatch(hands, b);
-      if (h) { cur = { b, handId: h.id, since: now, lastSeen: now, engaged: false, fired: false, anchor: null, sent: { du: 0, dv: 0 }, scrollAcc: 0 }; hand = h; break; }
+      if (h) { cur = { b, handId: h.id, since: now, lastSeen: now, engaged: false, fired: false, anchor: null, sent: { du: 0, dv: 0 }, scrollAcc: 0, scrolling: false }; hand = h; break; }
     }
   }
   if (!cur) return;
@@ -212,17 +218,24 @@ function updateBindings(hands, now) {
       cur.prevDu = du; cur.prevDv = dv;
     }
   } else if (b.action.type === 'scroll') {
-    const step = SCROLL_PX / Math.max(0.1, b.action.speed || 1);
-    const ticks = Math.trunc((p.y - cur.anchor.y) / step);
-    // Inverted (user preference): moving the hand up scrolls the other way from before.
-    if (ticks !== 0) { cur.anchor.y += ticks * step; send({ type: 'scroll', ticks: -ticks }); }
+    // Continuous: every px of palm motion becomes a proportional (sub-notch) wheel delta.
+    // Inverted (user preference): moving the hand down scrolls up, like dragging the page.
+    const dy = p.y - cur.anchor.y;
+    if (!cur.scrolling) { if (Math.abs(dy) < SCROLL_DEADZONE) return; cur.scrolling = true; cur.anchor.y = p.y; return; }
+    cur.scrollAcc += dy * (120 / SCROLL_PX) * Math.max(0.1, b.action.speed || 1);
+    cur.anchor.y = p.y;
+    if (Math.abs(cur.scrollAcc) >= SCROLL_MIN_UNITS) {
+      const units = Math.trunc(cur.scrollAcc);
+      cur.scrollAcc -= units;
+      send({ type: 'scroll', units });
+    }
   }
 }
 
 // ---------- Pointer ----------
 function releasePointer() {
   if (dragging) send({ type: 'up' });
-  dragging = false; wasPinch = false; pinchPos = null; preFreezeStart = 0; pinchIgnored = false;
+  dragging = false; wasPinch = false; wasRPinch = false; pinchPos = null; preFreezeStart = 0; pinchIgnored = false;
 }
 
 function handLost() {
@@ -291,6 +304,14 @@ function onUpdate(hands) {
   if (!pinch) pinchIgnored = false;
   wasPinch = pinch;
 
+  // Right-click pinch (optional second finger): fires once on contact, cursor held still meanwhile.
+  const rpinch = !!hand.rightPinch;
+  if (rpinch) {
+    if (!wasRPinch && !suppress && !dragging && on) send({ type: 'rightClick' });
+    freeze = true;
+  }
+  wasRPinch = rpinch;
+
   if (!engaged || cur.b.action.type !== 'moveWindow') {
     if (!freeze || firstFrame || !cursor) cursor = { u, v };
   }
@@ -344,10 +365,14 @@ function updatePower() {
   if (tracker.setMaxFps) tracker.setMaxFps(st.enabled && st.paused && !st.settingsOpen ? 12 : 30);
 }
 let tracker = null;
+function applyPointer() {
+  if (tracker && tracker.setPointer) tracker.setPointer({ clickFinger: cfg.clickFinger, rightClickFinger: cfg.rightClickFinger, cursorAnchor: cfg.cursorAnchor, twoHands: !!cfg.twoHands });
+}
 function applyConfig(c) {
   if (!c || !Array.isArray(c.bindings)) return;
   cfg = c;
   if (tracker && tracker.setTuning && c.poseTuning) tracker.setTuning(c.poseTuning);
+  applyPointer();
 }
 
 if (api) {
@@ -371,5 +396,6 @@ createHandTracker(video, {
 }).then((t) => {
   tracker = t;
   if (cfg && cfg.poseTuning && t.setTuning) t.setTuning(cfg.poseTuning);
+  applyPointer();
   updatePower();
 });

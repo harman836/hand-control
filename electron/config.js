@@ -9,6 +9,8 @@ const MEDIA_KEYS = ['playpause', 'next', 'prev', 'volup', 'voldown', 'mute'];
 const MOUSE_BUTTONS = ['right', 'double', 'middle'];
 const ACTION_TYPES = ['media', 'keys', 'launch', 'mouse', 'togglePause', 'moveWindow', 'scroll', 'none'];
 const CONTINUOUS = new Set(['moveWindow', 'scroll']);
+const FINGERS = ['index', 'middle', 'ring', 'pinky'];
+const ANCHORS = ['pinch', 'index', 'palm'];
 
 const DEFAULT_BINDINGS = [
   { id: 'move-window', enabled: true, name: 'Move window', pose: 'fist', hand: 'any', holdMs: 250, cooldownMs: 1000, action: { type: 'moveWindow' } },
@@ -33,6 +35,10 @@ const DEFAULTS = {
   comfortBox: { w: 0.7, h: 0.6 },
   cursorSmoothing: 0.5,
   clickMaxMs: 250,
+  clickFinger: 'index',        // finger that pinches the thumb to click / drag
+  rightClickFinger: 'none',    // finger that pinches the thumb to right-click ('none' = off)
+  cursorAnchor: 'pinch',       // 'pinch' (thumb/click-finger midpoint) | 'index' (fingertip) | 'palm'
+  twoHands: false,             // track two hands at once (slower: palm detection runs every frame)
   bindings: DEFAULT_BINDINGS,
   poseTuning: DEFAULT_TUNING,
 };
@@ -112,6 +118,10 @@ function validate(input) {
     comfortBox: { w: num(box.w, 0.2, 1, d.comfortBox.w), h: num(box.h, 0.2, 1, d.comfortBox.h) },
     cursorSmoothing: num(c.cursorSmoothing, 0, 1, d.cursorSmoothing),
     clickMaxMs: Math.round(num(c.clickMaxMs, 80, 1000, d.clickMaxMs)),
+    clickFinger: oneOf(c.clickFinger, FINGERS, d.clickFinger),
+    rightClickFinger: (() => { const r = oneOf(c.rightClickFinger, [...FINGERS, 'none'], d.rightClickFinger); return r === oneOf(c.clickFinger, FINGERS, d.clickFinger) ? 'none' : r; })(),
+    cursorAnchor: oneOf(c.cursorAnchor, ANCHORS, d.cursorAnchor),
+    twoHands: typeof c.twoHands === 'boolean' ? c.twoHands : d.twoHands,
     bindings,
     poseTuning: validateTuning(c.poseTuning),
   };

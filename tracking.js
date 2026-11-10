@@ -5,7 +5,10 @@ import { FilesetResolver, HandLandmarker } from 'https://cdn.jsdelivr.net/npm/@m
 const WASM = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm';
 const MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
-const PINCH_ON = 0.33, PINCH_OFF = 0.45; // normalized thumb-index distance thresholds
+const PINCH_ON = 0.33, PINCH_OFF = 0.45; // normalized thumb-to-fingertip distance thresholds
+const TIPS = { index: 8, middle: 12, ring: 16, pinky: 20 };
+// Pointer config (config.clickFinger / rightClickFinger / cursorAnchor; must match electron/config.js).
+export const DEFAULT_POINTER = { clickFinger: 'index', rightClickFinger: 'none', cursorAnchor: 'pinch', twoHands: false };
 const GESTURE_FRAMES = 3;                // frames a raw gesture must hold before it commits
 const LOST_MS = 300;                     // hand gone this long -> reset its filters
 
@@ -41,7 +44,8 @@ function newState() {
   return {
     fx: new OneEuro(1.2, 0.02, 1), fy: new OneEuro(1.2, 0.02, 1),
     lm: Array.from({ length: 21 }, () => [new OneEuro(3, 0.05, 1), new OneEuro(3, 0.05, 1)]),
-    pinch: false, gesture: 'none', cand: 'none', candN: 0, seen: 0,
+    pinch: false, rpinch: false, pinches: { index: false, middle: false, ring: false, pinky: false },
+    gesture: 'none', cand: 'none', candN: 0, seen: 0,
     fingers: { thumb: false, index: false, middle: false, ring: false, pinky: false },
     fCand: '', fN: 0, rawFingers: null,
     pose: 'none', pCand: 'none', pN: 0,
@@ -168,6 +172,18 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus, tuning: i
   const states = new Map(); // 'Left' | 'Right' -> state
   let tuning = initialTuning || DEFAULT_TUNING;
   const setTuning = (t) => { if (t && typeof t === 'object') tuning = t; };
+  let pointer = { ...DEFAULT_POINTER };
+  const setPointer = (p) => {
+    if (!p || typeof p !== 'object') return;
+    const next = { ...DEFAULT_POINTER, ...p };
+    if (next.cursorAnchor !== pointer.cursorAnchor || next.clickFinger !== pointer.clickFinger) states.clear(); // re-seed filters
+    const handsChanged = !!next.twoHands !== !!pointer.twoHands;
+    pointer = next;
+    // Looking for a 2nd hand re-runs the costly palm detector every frame while only one is visible.
+    if (handsChanged && landmarker) Promise.resolve(landmarker.setOptions({ numHands: pointer.twoHands ? 2 : 1 })).catch((e) => console.warn("numHands change failed", e));
+  };
+  // Perf counters (logged every 5s; visible with HAND_DEBUG=1).
+  let perfN = 0, perfMs = 0, perfMax = 0, perfAt = performance.now();
 
   // Power state: `active` false releases the camera entirely (LED off, ~0 CPU); maxFps caps detection rate.
   let active = true, maxFps = 30, lastDetect = 0, lastHandAt = 0, idle = false, vfcId = 0;
@@ -205,9 +221,10 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus, tuning: i
     if (landmarker) { try { landmarker.close(); } catch (e) { /* ignore */ } landmarker = null; }
   };
 
-  let resuming = null;
+  let resuming = null, wantActive = true;
   async function setActive(on) {
     on = !!on;
+    wantActive = on;
     if (!running || on === active) return;
     active = on;
     if (!on) { unschedule(); releaseCamera(); states.clear(); status('sleeping'); return; }
@@ -222,43 +239,50 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus, tuning: i
         schedule();
       } catch (err) {
         status('error', (err && err.message) || String(err));
+        releaseCamera();
+        // Camera couldn't reopen (often busy in another app): drop back to inactive and retry while still wanted.
+        active = false;
+        setTimeout(() => { if (running && wantActive) setActive(true); }, 3000);
       } finally { resuming = null; }
     })();
     return resuming;
   }
   const setMaxFps = (n) => { if (Number.isFinite(n) && n > 0) maxFps = Math.min(30, n); };
 
-  try {
-    // 1. Camera
-    status('camera');
-    try {
-      await openCamera();
-    } catch (err) {
-      if (err && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError' || err.name === 'SecurityError')) {
-        status('denied');
-      } else {
-        status('error', (err && err.message) || String(err));
-      }
-      return { stop, setTuning, setActive, setMaxFps };
-    }
-    if (!running) { stop(); return { stop, setTuning, setActive, setMaxFps }; }
+  const api = { stop, setTuning, setPointer, setActive, setMaxFps };
+  const errMsg = (err) => (err && err.message) || String(err);
+  const isDenied = (err) => err && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError' || err.name === 'SecurityError');
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-    // 2. Model (GPU first, CPU fallback)
-    status('loading');
-    const fileset = await FilesetResolver.forVisionTasks(WASM);
-    const make = (delegate) => HandLandmarker.createFromOptions(fileset, {
-      baseOptions: { modelAssetPath: MODEL, delegate },
-      runningMode: 'VIDEO', numHands: 2,
-    });
-    try { landmarker = await make('GPU'); }
-    catch (e) { console.warn('GPU delegate failed, using CPU', e); landmarker = await make('CPU'); }
-    if (!running) { stop(); return { stop, setTuning, setActive, setMaxFps }; }
-    status(active ? 'ready' : 'sleeping');
-  } catch (err) {
-    status('error', (err && err.message) || String(err));
-    stop();
-    return { stop, setTuning, setActive, setMaxFps };
+  // Startup is retried: a busy camera (another app has it), no network yet at login, or a dropped
+  // model download would otherwise leave tracking dead until the app was restarted.
+  for (let attempt = 0; running; attempt++) {
+    try {
+      // 1. Camera
+      if (active && !stream) { status('camera'); await openCamera(); }
+      if (!running) { stop(); return api; }
+
+      // 2. Model (GPU first, CPU fallback)
+      status('loading');
+      const fileset = await FilesetResolver.forVisionTasks(WASM);
+      const make = (delegate) => HandLandmarker.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: MODEL, delegate },
+        runningMode: 'VIDEO', numHands: pointer.twoHands ? 2 : 1,
+      });
+      try { landmarker = await make('GPU'); }
+      catch (e) { console.warn('GPU delegate failed, using CPU', e); landmarker = await make('CPU'); }
+      if (!running) { stop(); return api; }
+      status(active ? 'ready' : 'sleeping');
+      break;
+    } catch (err) {
+      if (isDenied(err)) { status('denied'); releaseCamera(); }
+      else { status('error', errMsg(err)); console.error('tracker start failed (attempt ' + (attempt + 1) + '):', err); }
+      // A camera the OS refuses to share is usually freed soon; keep it closed between tries.
+      if (!landmarker) releaseCamera();
+      await wait(Math.min(30000, 2000 * 2 ** Math.min(attempt, 4))); // 2s, 4s, 8s, 16s, then every 30s
+    }
   }
+  if (!running) return api;
 
   // Normalized landmark -> mirrored viewport px, replicating object-fit: cover.
   function mapPoint(l, vw, vh, W, H) {
@@ -270,7 +294,7 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus, tuning: i
   function frame() {
     if (!running || !active) return;
     schedule();
-    if (videoEl.readyState < 2 || videoEl.currentTime === lastVideoTime) return;
+    if (!landmarker || videoEl.readyState < 2 || videoEl.currentTime === lastVideoTime) return;
     const nowMs = performance.now(), t = nowMs / 1000;
     // Rate limit: full rate while a hand is in view, IDLE_FPS once none has been seen for a while.
     const nowIdle = nowMs - lastHandAt > IDLE_AFTER_MS;
@@ -284,8 +308,15 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus, tuning: i
     const W = window.innerWidth, H = window.innerHeight;
 
     let result;
+    const t0 = performance.now();
     try { result = landmarker.detectForVideo(videoEl, nowMs); }
     catch (e) { console.error(e); return; }
+    const dt = performance.now() - t0;
+    perfN++; perfMs += dt; perfMax = Math.max(perfMax, dt);
+    if (t0 - perfAt > 5000) {
+      console.log(`[perf] detect avg ${(perfMs / perfN).toFixed(1)}ms max ${perfMax.toFixed(1)}ms, ${(perfN * 1000 / (t0 - perfAt)).toFixed(1)} fps${idle ? ' (idle)' : ''}`);
+      perfN = 0; perfMs = 0; perfMax = 0; perfAt = t0;
+    }
 
     const hands = [];
     const taken = new Set();
@@ -304,23 +335,35 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus, tuning: i
       // Gesture math in video-pixel space (aspect-correct); drawing coords mapped separately.
       const vp = lms.map((l) => ({ x: l.x * vw, y: l.y * vh }));
       const size = dist(vp[0], vp[9]) || 1;
-      const d = dist(vp[4], vp[8]) / size;
-      if (!st.pinch && d < PINCH_ON) st.pinch = true;
-      else if (st.pinch && d > PINCH_OFF) st.pinch = false;
+      // Thumb-to-fingertip distance for every finger; a finger only counts as pinched while it is
+      // the closest one to the thumb (so an index pinch can't also trip a middle-finger pinch).
+      const dists = {};
+      for (const n in TIPS) dists[n] = dist(vp[4], vp[TIPS[n]]) / size;
+      const closest = Object.keys(dists).reduce((a, b) => (dists[b] < dists[a] ? b : a));
+      for (const n in TIPS) {
+        const was = st.pinches[n];
+        st.pinches[n] = was ? dists[n] < PINCH_OFF : dists[n] < PINCH_ON && n === closest;
+      }
+      const cf = TIPS[pointer.clickFinger] ? pointer.clickFinger : 'index';
+      const rf = TIPS[pointer.rightClickFinger] && pointer.rightClickFinger !== cf ? pointer.rightClickFinger : null;
+      st.pinch = st.pinches[cf];
+      st.rpinch = rf ? st.pinches[rf] && !st.pinch : false;
+      const d = dists[cf];
       const pinchStrength = clamp01((0.6 - d) / (0.6 - 0.2));
+      const anyPinch = st.pinch || st.rpinch;
 
       // Debounce gesture: raw value must persist GESTURE_FRAMES frames.
-      const raw = rawGesture(vp, st.pinch);
+      const raw = rawGesture(vp, anyPinch);
       if (raw === st.cand) st.candN++; else { st.cand = raw; st.candN = 1; }
       if (st.candN >= GESTURE_FRAMES) st.gesture = st.cand;
 
       // Debounced per-finger state and pose.
-      const rf = fingerStates(vp);
-      const fKey = FINGER_NAMES.map((n) => (rf[n] ? 1 : 0)).join('');
+      const fs = fingerStates(vp);
+      const fKey = FINGER_NAMES.map((n) => (fs[n] ? 1 : 0)).join('');
       if (fKey === st.fCand) st.fN++; else { st.fCand = fKey; st.fN = 1; }
-      if (st.fN >= GESTURE_FRAMES) st.fingers = rf;
+      if (st.fN >= GESTURE_FRAMES) st.fingers = fs;
       const metrics = fingerMetrics(vp);
-      const rawPose = classifyPose(vp, st.pinch, tuning, metrics);
+      const rawPose = classifyPose(vp, anyPinch, tuning, metrics);
       if (rawPose === st.pCand) st.pN++; else { st.pCand = rawPose; st.pN = 1; }
       const need = DEFAULT_TUNING[st.pCand] ? tuneFor(tuning, st.pCand).frames : GESTURE_FRAMES;
       if (st.pN >= need) st.pose = st.pCand;
@@ -330,10 +373,14 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus, tuning: i
       const landmarks = pts.map((p, i) => ({
         x: st.lm[i][0].filter(p.x, t), y: st.lm[i][1].filter(p.y, t), z: p.z,
       }));
-      const mx = (pts[4].x + pts[8].x) / 2, my = (pts[4].y + pts[8].y) / 2;
+      // Cursor anchor: thumb/click-finger midpoint, index fingertip, or palm centre (steadiest while pinching).
+      const tip = pts[TIPS[cf]];
+      const [mx, my] = pointer.cursorAnchor === 'index' ? [pts[8].x, pts[8].y]
+        : pointer.cursorAnchor === 'palm' ? [pts[9].x, pts[9].y]
+        : [(pts[4].x + tip.x) / 2, (pts[4].y + tip.y) / 2];
       hands.push({
         id, x: st.fx.filter(mx, t), y: st.fy.filter(my, t),
-        pinch: st.pinch, pinchStrength, gesture: st.gesture, landmarks,
+        pinch: st.pinch, rightPinch: st.rpinch, pinches: { ...st.pinches }, pinchStrength, gesture: st.gesture, landmarks,
         fingers: { ...st.fingers }, pose: st.pose,
         metrics: {
           thumb: +metrics.thumb.toFixed(3), index: +metrics.index.toFixed(3), middle: +metrics.middle.toFixed(3),
@@ -351,5 +398,5 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus, tuning: i
   }
   if (active) schedule();
 
-  return { stop, setTuning, setActive, setMaxFps };
+  return { stop, setTuning, setPointer, setActive, setMaxFps };
 }

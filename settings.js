@@ -53,6 +53,7 @@ function defaultConfig() {
   const b = (id, pose, name, action, extra = {}) => ({ id, enabled: true, name, pose, hand: 'any', holdMs: 500, cooldownMs: 1000, action, ...extra });
   return {
     version: 2, enabled: false, primaryHand: 'Right', comfortBox: { w: 0.7, h: 0.6 }, cursorSmoothing: 0.5, clickMaxMs: 250,
+    clickFinger: 'index', rightClickFinger: 'none', cursorAnchor: 'pinch', twoHands: false,
     poseTuning: defaultPoseTuning(),
     bindings: [
       b('fist-move', 'fist', 'Move window', { type: 'moveWindow' }, { holdMs: 250 }),
@@ -430,6 +431,14 @@ function rangeHTML(f, label, min, max, step, val, fmt) {
     <input type="range" id="f-${f}" data-f="${f}" min="${min}" max="${max}" step="${step}" value="${val}" style="--p:${((val - min) / (max - min)) * 100}%"></div>`;
 }
 const pct = (v) => Math.round(v * 100) + '%';
+// Thumb touches this fingertip.
+const PINCH_FINGERS = [['index', 'Index'], ['middle', 'Middle'], ['ring', 'Ring'], ['pinky', 'Pinky']];
+function segHTML(key, label, opts, val) {
+  return `<div class="field"><span class="flabel">${label}</span>
+    <div class="seg" role="group" aria-label="${label}">
+      ${opts.map(([v, l]) => `<button data-ptr="${key}" data-val="${v}" aria-pressed="${val === v}">${l}</button>`).join('')}
+    </div></div>`;
+}
 const PTR_FMT = { boxW: pct, boxH: pct, smooth: (v) => (v <= 0.05 ? 'Off' : pct(v)), clickMax: (v) => v + ' ms' };
 function renderPointer() {
   const el = $('#pointer');
@@ -440,6 +449,10 @@ function renderPointer() {
           ${['Right', 'Left'].map((h) => `<button data-primary="${h}" aria-pressed="${cfg.primaryHand === h}">${h} hand</button>`).join('')}
         </div>
       </div>
+      ${segHTML('clickFinger', 'Click / drag pinch', PINCH_FINGERS, cfg.clickFinger)}
+      ${segHTML('rightClickFinger', 'Right-click pinch', [['none', 'Off'], ...PINCH_FINGERS.filter(([v]) => v !== cfg.clickFinger)], cfg.rightClickFinger)}
+      ${segHTML('twoHands', 'Hands tracked', [['false', 'One (faster)'], ['true', 'Both']], String(!!cfg.twoHands))}
+      ${segHTML('cursorAnchor', 'Cursor follows', [['pinch', 'Pinch point'], ['index', 'Index tip'], ['palm', 'Palm']], cfg.cursorAnchor)}
       ${rangeHTML('boxW', 'Comfort box width', 0.3, 1, 0.05, cfg.comfortBox.w, PTR_FMT.boxW)}
       ${rangeHTML('boxH', 'Comfort box height', 0.3, 1, 0.05, cfg.comfortBox.h, PTR_FMT.boxH)}
       ${rangeHTML('smooth', 'Cursor smoothing', 0, 1, 0.05, cfg.cursorSmoothing, PTR_FMT.smooth)}
@@ -1275,6 +1288,14 @@ function wire() {
   $('#tuning').addEventListener('click', onTuneClick);
   $('#tuneActions').addEventListener('click', onTuneClick);
   $('#pointer').addEventListener('click', (e) => {
+    const sp = e.target.closest('[data-ptr]');
+    if (sp) {
+      cfg[sp.dataset.ptr] = sp.dataset.ptr === 'twoHands' ? sp.dataset.val === 'true' : sp.dataset.val;
+      if (cfg.rightClickFinger === cfg.clickFinger) cfg.rightClickFinger = 'none';
+      renderPointer(); // right-click options depend on the click finger
+      scheduleSave();
+      return;
+    }
     const t = e.target.closest('[data-primary]'); if (!t) return;
     cfg.primaryHand = t.dataset.primary;
     document.querySelectorAll('[data-primary]').forEach((x) => x.setAttribute('aria-pressed', String(x === t)));

@@ -56,6 +56,10 @@ function loadNut() {
     up: () => nut.mouse.releaseButton(L),
     click: () => nut.mouse.click(L),
     scroll: (n) => (n > 0 ? nut.mouse.scrollDown(n * unit) : nut.mouse.scrollUp(-n * unit)),
+    // Raw wheel delta, positive = up. libnut passes it straight through on Windows (sub-notch = smooth).
+    wheelUnits: (d) => (process.platform === 'win32'
+      ? (d > 0 ? nut.mouse.scrollUp(d) : nut.mouse.scrollDown(-d))
+      : (d > 0 ? nut.mouse.scrollUp(Math.max(1, Math.round(d / 120))) : nut.mouse.scrollDown(Math.max(1, Math.round(-d / 120))))),
   };
 }
 
@@ -177,6 +181,7 @@ function loadWin32() {
     up: async () => { send([mi(M.LEFTUP)]); },
     click: async () => { send([mi(M.LEFTDOWN), mi(M.LEFTUP)]); },
     scroll: async (n) => { send([mi(M.WHEEL, -n * NOTCH)]); }, // positive wheel delta = scroll up
+    wheelUnits: async (d) => { send([mi(M.WHEEL, d)]); },      // raw delta, positive = up
   };
 
   return {

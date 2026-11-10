@@ -207,10 +207,15 @@ ipcMain.on('hand:intent', (e, msg) => {
     case 'up': releaseButton(); break;
     case 'click': if (mouse && !buttonDown) enqueue(() => mouse.click()); break;
     case 'scroll': {
-      const n = Math.max(-10, Math.min(10, Math.trunc(msg.ticks) || 0));
-      if (n && mouse) enqueue(() => mouse.scroll(n));
+      // units: raw wheel delta (120 = one notch), positive = scroll up. Legacy `ticks` = notches, positive = down.
+      const u = Number.isFinite(msg.units) ? Math.trunc(msg.units) : -120 * (Math.trunc(msg.ticks) || 0);
+      const n = Math.max(-1200, Math.min(1200, u));
+      if (n && mouse) enqueue(() => mouse.wheelUnits(n));
       break;
     }
+    case 'rightClick':
+      if (win32 && !buttonDown) enqueue(() => win32.button('right'));
+      break;
     case 'action': {
       const b = cfg.bindings.find((x) => x.id === msg.id && x.enabled);
       if (!b || config.isContinuous(b.action)) return;
