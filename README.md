@@ -2,6 +2,10 @@
 
 A customisable hand-gesture control layer for Windows. It's an Electron tray app that tracks your hand through the webcam (MediaPipe, `tracking.js`) and turns poses into real input: cursor, clicks, drags, keyboard shortcuts, media keys, app launching, scrolling and moving windows.
 
+## Download
+
+Grab the latest build from [Releases](https://github.com/harman836/hand-control/releases/latest): the **x64** files for most Windows PCs, **arm64** for Windows on ARM. The installers aren't code-signed, so SmartScreen may warn you (More info → Run anyway). The first launch needs internet to download the hand model.
+
 ## Run / build
 
 ```bash
@@ -9,7 +13,7 @@ npm install
 npm start                  # dev run; opens Settings
 npm start -- --tray        # start in the tray only (no Settings window)
 npm start -- --control     # start with desktop control on (still paused)
-npm run dist               # builds for this PC's CPU: dist/HandControl-<ver>-portable.exe + -setup.exe
+npm run dist               # builds for this PC's CPU: dist/HandControl-<ver>-<arch>-portable.exe + -setup.exe
 npm run dist:x64           # or force an architecture (dist:arm64)
 ```
 
