@@ -50,10 +50,10 @@
       ]
     },
     "portable": {
-      "artifactName": "HandControl-${version}-portable.exe"
+      "artifactName": "HandControl-${version}-${arch}-portable.exe"
     },
     "nsis": {
-      "artifactName": "HandControl-${version}-setup.exe",
+      "artifactName": "HandControl-${version}-${arch}-setup.exe",
       "oneClick": true
     }
   }
