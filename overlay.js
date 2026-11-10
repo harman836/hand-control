@@ -30,7 +30,7 @@ const CONTINUOUS = new Set(['moveWindow', 'scroll']);
 const st = { enabled: false, paused: true, mouseOk: true, mouseError: null, settingsOpen: false, track: 'camera', trackDetail: '' };
 let cfg = {
   primaryHand: 'Right', comfortBox: { w: 0.7, h: 0.6 }, cursorSmoothing: 0.5, clickMaxMs: 250, bindings: [],
-  clickFinger: 'index', rightClickFinger: 'none', cursorAnchor: 'pinch', twoHands: false,
+  clickFinger: 'index', rightClickFinger: 'none', cursorAnchor: 'pinch', twoHands: false, pinchOn: 0.33, pinchOff: 0.45,
 };
 let wasRPinch = false;
 let wasPinch = false, pinchStart = 0, pinchPos = null, dragging = false, pinchIgnored = false;
@@ -331,7 +331,7 @@ setInterval(() => {
     hands: lastHands.map((h) => ({
       // overlay px == primary-display DIP (Settings divides by screen.width)
       id: h.id, x: h.x, y: h.y, pose: poseOf(h), fingers: h.fingers || null,
-      pinch: !!h.pinch, pinchStrength: h.pinchStrength || 0, metrics: h.metrics || null,
+      pinch: !!h.pinch, rightPinch: !!h.rightPinch, fistBlock: !!h.fistBlock, pinchDist: h.pinchDist || null, pinchStrength: h.pinchStrength || 0, metrics: h.metrics || null,
       lm:Array.isArray(h.landmarks) ? h.landmarks.map((p) => [Math.round(p.x), Math.round(p.y)]) : null,
     })),
     activeBinding: cur ? cur.b.id : null,
@@ -366,7 +366,7 @@ function updatePower() {
 }
 let tracker = null;
 function applyPointer() {
-  if (tracker && tracker.setPointer) tracker.setPointer({ clickFinger: cfg.clickFinger, rightClickFinger: cfg.rightClickFinger, cursorAnchor: cfg.cursorAnchor, twoHands: !!cfg.twoHands });
+  if (tracker && tracker.setPointer) tracker.setPointer({ clickFinger: cfg.clickFinger, rightClickFinger: cfg.rightClickFinger, cursorAnchor: cfg.cursorAnchor, twoHands: !!cfg.twoHands, pinchOn: cfg.pinchOn || 0.33, pinchOff: cfg.pinchOff || 0.45 });
 }
 function applyConfig(c) {
   if (!c || !Array.isArray(c.bindings)) return;

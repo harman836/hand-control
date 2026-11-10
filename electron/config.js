@@ -39,6 +39,8 @@ const DEFAULTS = {
   rightClickFinger: 'none',    // finger that pinches the thumb to right-click ('none' = off)
   cursorAnchor: 'pinch',       // 'pinch' (thumb/click-finger midpoint) | 'index' (fingertip) | 'palm'
   twoHands: false,             // track two hands at once (slower: palm detection runs every frame)
+  pinchOn: 0.33,               // thumb-to-fingertip distance / hand size below which a pinch starts
+  pinchOff: 0.45,              // ...and above which it releases (gap = hysteresis, stops flicker)
   bindings: DEFAULT_BINDINGS,
   poseTuning: DEFAULT_TUNING,
 };
@@ -122,6 +124,10 @@ function validate(input) {
     rightClickFinger: (() => { const r = oneOf(c.rightClickFinger, [...FINGERS, 'none'], d.rightClickFinger); return r === oneOf(c.clickFinger, FINGERS, d.clickFinger) ? 'none' : r; })(),
     cursorAnchor: oneOf(c.cursorAnchor, ANCHORS, d.cursorAnchor),
     twoHands: typeof c.twoHands === 'boolean' ? c.twoHands : d.twoHands,
+    ...(() => {
+      const on = num(c.pinchOn, 0.1, 0.6, d.pinchOn);
+      return { pinchOn: on, pinchOff: Math.max(on + 0.03, num(c.pinchOff, 0.15, 0.8, d.pinchOff)) };
+    })(),
     bindings,
     poseTuning: validateTuning(c.poseTuning),
   };

@@ -507,3 +507,30 @@ input[type="range"]::-moz-range-thumb { width: 22px; height: 22px; border: 0; bo
   .fired.show.gone { opacity: 0; }
 }
 .panel:focus { outline: none; }
+
+/* ---------- side layout: panels dock to the right so the camera / your hand stays visible ---------- */
+@media (min-width: 820px) {
+  .panel {
+    left: auto; right: 16px; margin-inline: 0;
+    top: var(--top-h); bottom: auto;
+    width: min(420px, calc(100vw - 360px));
+    max-height: calc(100vh - var(--top-h) - 18px);
+  }
+  .panel.wide { width: min(460px, calc(100vw - 340px)); }
+  .panel.tall { height: calc(100vh - var(--top-h) - 18px); }
+  /* the HUD and dock stay usable beside the panel; shift them into the free space on the left */
+  .panel-open .hud { opacity: 1; transform: none; pointer-events: auto; }
+  .panel-open .hud, .panel-open .dock { --free: calc(100vw - min(460px, calc(100vw - 340px)) - 32px); }
+  .panel-open .hud { left: 16px; right: auto; margin-inline: 0; width: min(460px, calc(var(--free) - 16px)); }
+  .panel-open .dock { left: calc(16px + var(--free) / 2); }
+  .hud, .dock { transition: opacity 0.28s var(--ease), transform 0.36s var(--ease), left 0.4s var(--ease), width 0.4s var(--ease); }
+}
+
+/* ---------- pointer: live pinch meter ---------- */
+.pinch-box { padding: 12px 14px; border-radius: var(--r-in); background: rgba(0, 0, 0, 0.18); }
+.pinch-meter .meter-label .pm-state { flex: none; font-weight: 600; color: var(--ink-3); min-width: 64px; text-align: right; }
+.pinch-meter.pass .pm-state { color: var(--ok); }
+.meter-band { position: absolute; top: 0; bottom: 0; background: rgba(255, 255, 255, 0.10); }
+.meter-thr.soft { background: rgba(255, 255, 255, 0.45); }
+.pinch-help { margin: 10px 0 0; font-size: 11.5px; color: var(--ink-3); line-height: 1.4; }
+.pinch-help b { color: var(--ink-2); font-weight: 600; }

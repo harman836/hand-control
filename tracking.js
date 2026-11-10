@@ -7,8 +7,12 @@ const MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/h
 
 const PINCH_ON = 0.33, PINCH_OFF = 0.45; // normalized thumb-to-fingertip distance thresholds
 const TIPS = { index: 8, middle: 12, ring: 16, pinky: 20 };
+// In a fist the thumb rests on the curled fingertips, which looks like a pinch by distance alone.
+// A finger whose tip is folded back past its middle joint (tip-to-wrist / PIP-to-wrist below this)
+// is curled into the palm; with all four curled the hand is a fist and no pinch is reported.
+const FIST_CURL = 1.0;
 // Pointer config (config.clickFinger / rightClickFinger / cursorAnchor; must match electron/config.js).
-export const DEFAULT_POINTER = { clickFinger: 'index', rightClickFinger: 'none', cursorAnchor: 'pinch', twoHands: false };
+export const DEFAULT_POINTER = { clickFinger: 'index', rightClickFinger: 'none', cursorAnchor: 'pinch', twoHands: false, pinchOn: PINCH_ON, pinchOff: PINCH_OFF };
 const GESTURE_FRAMES = 3;                // frames a raw gesture must hold before it commits
 const LOST_MS = 300;                     // hand gone this long -> reset its filters
 
@@ -340,16 +344,18 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus, tuning: i
       const dists = {};
       for (const n in TIPS) dists[n] = dist(vp[4], vp[TIPS[n]]) / size;
       const closest = Object.keys(dists).reduce((a, b) => (dists[b] < dists[a] ? b : a));
+      const metrics = fingerMetrics(vp);
+      const fist = ['index', 'middle', 'ring', 'pinky'].every((n) => metrics[n] < FIST_CURL);
       for (const n in TIPS) {
         const was = st.pinches[n];
-        st.pinches[n] = was ? dists[n] < PINCH_OFF : dists[n] < PINCH_ON && n === closest;
+        st.pinches[n] = !fist && (was ? dists[n] < pointer.pinchOff : dists[n] < pointer.pinchOn && n === closest);
       }
       const cf = TIPS[pointer.clickFinger] ? pointer.clickFinger : 'index';
       const rf = TIPS[pointer.rightClickFinger] && pointer.rightClickFinger !== cf ? pointer.rightClickFinger : null;
       st.pinch = st.pinches[cf];
       st.rpinch = rf ? st.pinches[rf] && !st.pinch : false;
       const d = dists[cf];
-      const pinchStrength = clamp01((0.6 - d) / (0.6 - 0.2));
+      const pinchStrength = fist ? 0 : clamp01((0.6 - d) / (0.6 - 0.2));
       const anyPinch = st.pinch || st.rpinch;
 
       // Debounce gesture: raw value must persist GESTURE_FRAMES frames.
@@ -362,7 +368,6 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus, tuning: i
       const fKey = FINGER_NAMES.map((n) => (fs[n] ? 1 : 0)).join('');
       if (fKey === st.fCand) st.fN++; else { st.fCand = fKey; st.fN = 1; }
       if (st.fN >= GESTURE_FRAMES) st.fingers = fs;
-      const metrics = fingerMetrics(vp);
       const rawPose = classifyPose(vp, anyPinch, tuning, metrics);
       if (rawPose === st.pCand) st.pN++; else { st.pCand = rawPose; st.pN = 1; }
       const need = DEFAULT_TUNING[st.pCand] ? tuneFor(tuning, st.pCand).frames : GESTURE_FRAMES;
@@ -380,7 +385,8 @@ export async function createHandTracker(videoEl, { onUpdate, onStatus, tuning: i
         : [(pts[4].x + tip.x) / 2, (pts[4].y + tip.y) / 2];
       hands.push({
         id, x: st.fx.filter(mx, t), y: st.fy.filter(my, t),
-        pinch: st.pinch, rightPinch: st.rpinch, pinches: { ...st.pinches }, pinchStrength, gesture: st.gesture, landmarks,
+        pinch: st.pinch, rightPinch: st.rpinch, pinches: { ...st.pinches }, pinchStrength, fistBlock: fist,
+        pinchDist: { index: +dists.index.toFixed(3), middle: +dists.middle.toFixed(3), ring: +dists.ring.toFixed(3), pinky: +dists.pinky.toFixed(3) }, gesture: st.gesture, landmarks,
         fingers: { ...st.fingers }, pose: st.pose,
         metrics: {
           thumb: +metrics.thumb.toFixed(3), index: +metrics.index.toFixed(3), middle: +metrics.middle.toFixed(3),

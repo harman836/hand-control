@@ -53,7 +53,7 @@ function defaultConfig() {
   const b = (id, pose, name, action, extra = {}) => ({ id, enabled: true, name, pose, hand: 'any', holdMs: 500, cooldownMs: 1000, action, ...extra });
   return {
     version: 2, enabled: false, primaryHand: 'Right', comfortBox: { w: 0.7, h: 0.6 }, cursorSmoothing: 0.5, clickMaxMs: 250,
-    clickFinger: 'index', rightClickFinger: 'none', cursorAnchor: 'pinch', twoHands: false,
+    clickFinger: 'index', rightClickFinger: 'none', cursorAnchor: 'pinch', twoHands: false, pinchOn: 0.33, pinchOff: 0.45,
     poseTuning: defaultPoseTuning(),
     bindings: [
       b('fist-move', 'fist', 'Move window', { type: 'moveWindow' }, { holdMs: 250 }),
@@ -439,7 +439,37 @@ function segHTML(key, label, opts, val) {
       ${opts.map(([v, l]) => `<button data-ptr="${key}" data-val="${v}" aria-pressed="${val === v}">${l}</button>`).join('')}
     </div></div>`;
 }
-const PTR_FMT = { boxW: pct, boxH: pct, smooth: (v) => (v <= 0.05 ? 'Off' : pct(v)), clickMax: (v) => v + ' ms' };
+const PTR_FMT = { boxW: pct, boxH: pct, smooth: (v) => (v <= 0.05 ? 'Off' : pct(v)), clickMax: (v) => v + ' ms', pinchOn: (v) => v.toFixed(2), pinchOff: (v) => v.toFixed(2) };
+const FNAME = { index: 'index', middle: 'middle', ring: 'ring', pinky: 'pinky' };
+const PINCH_SCALE = 0.9; // meter spans thumb-to-fingertip distance 0..0.9 hand sizes
+function pointerHint() {
+  const rc = cfg.rightClickFinger && cfg.rightClickFinger !== 'none' ? ` · thumb + ${FNAME[cfg.rightClickFinger]} right-clicks` : '';
+  return `Thumb + ${FNAME[cfg.clickFinger] || 'index'}: quick pinch clicks, hold to drag${rc}`;
+}
+function pinchMeterHTML(key, label, finger) {
+  const on = cfg.pinchOn, off = cfg.pinchOff, p = (v) => Math.min(100, (v / PINCH_SCALE) * 100);
+  return `<div class="meter na pinch-meter" data-pm="${key}" data-finger="${finger}">
+      <div class="meter-label"><b>${label}</b><span class="meter-req">thumb + ${FNAME[finger]}</span><span class="pm-state">—</span><output>—</output></div>
+      <div class="meter-track"><i class="meter-band" style="left:${p(on)}%;width:${p(off) - p(on)}%"></i><i class="meter-fill"></i>
+        <i class="meter-thr" data-thr="on" style="left:${p(on)}%"></i><i class="meter-thr soft" data-thr="off" style="left:${p(off)}%"></i></div>
+    </div>`;
+}
+function updatePinchMeter() {
+  const box = document.getElementById('pinchMeter'); if (!box) return;
+  const hands = telem && Array.isArray(telem.hands) ? telem.hands : [];
+  const h = hands.find((x) => x.id === cfg.primaryHand) || (hands.length === 1 ? hands[0] : null);
+  const src = document.getElementById('pinchSrc');
+  if (src) src.textContent = h ? `${h.id || ''} hand` : hands.length ? `Show your ${cfg.primaryHand.toLowerCase()} hand` : 'No hand in view';
+  box.querySelectorAll('.pinch-meter').forEach((row) => {
+    const d = h && h.pinchDist ? +h.pinchDist[row.dataset.finger] : NaN;
+    const ok = Number.isFinite(d);
+    const active = ok && (row.dataset.pm === 'click' ? !!h.pinch : !!h.rightPinch);
+    row.classList.toggle('na', !ok); row.classList.toggle('pass', active);
+    row.querySelector('.meter-fill').style.width = (ok ? Math.min(100, (d / PINCH_SCALE) * 100) : 0) + '%';
+    row.querySelector('output').textContent = ok ? d.toFixed(2) : '—';
+    row.querySelector('.pm-state').textContent = !ok ? '' : h.fistBlock ? 'Fist' : active ? (row.dataset.pm === 'click' ? 'Pinched' : 'Right-click') : 'Open';
+  });
+}
 function renderPointer() {
   const el = $('#pointer');
   el.innerHTML = `
@@ -451,18 +481,30 @@ function renderPointer() {
       </div>
       ${segHTML('clickFinger', 'Click / drag pinch', PINCH_FINGERS, cfg.clickFinger)}
       ${segHTML('rightClickFinger', 'Right-click pinch', [['none', 'Off'], ...PINCH_FINGERS.filter(([v]) => v !== cfg.clickFinger)], cfg.rightClickFinger)}
+      <div class="field pinch-box" id="pinchMeter">
+        <div class="meter-head"><span class="flabel">Pinch detection</span><span class="meter-src" id="pinchSrc">—</span></div>
+        <div class="meter-rows">
+          ${pinchMeterHTML('click', 'Click', cfg.clickFinger)}
+          ${cfg.rightClickFinger && cfg.rightClickFinger !== 'none' ? pinchMeterHTML('right', 'Right-click', cfg.rightClickFinger) : ''}
+        </div>
+        <p class="pinch-help">Bar = gap between thumb and fingertip. A pinch starts left of the <b>white</b> line and lets go right of the <b>grey</b> one.</p>
+      </div>
+      ${rangeHTML('pinchOn', 'Pinch starts below', 0.1, 0.6, 0.01, cfg.pinchOn, PTR_FMT.pinchOn)}
+      ${rangeHTML('pinchOff', 'Pinch releases above', 0.15, 0.8, 0.01, cfg.pinchOff, PTR_FMT.pinchOff)}
+      ${rangeHTML('clickMax', 'Max click duration', 100, 600, 10, cfg.clickMaxMs, PTR_FMT.clickMax)}
       ${segHTML('twoHands', 'Hands tracked', [['false', 'One (faster)'], ['true', 'Both']], String(!!cfg.twoHands))}
       ${segHTML('cursorAnchor', 'Cursor follows', [['pinch', 'Pinch point'], ['index', 'Index tip'], ['palm', 'Palm']], cfg.cursorAnchor)}
       ${rangeHTML('boxW', 'Comfort box width', 0.3, 1, 0.05, cfg.comfortBox.w, PTR_FMT.boxW)}
       ${rangeHTML('boxH', 'Comfort box height', 0.3, 1, 0.05, cfg.comfortBox.h, PTR_FMT.boxH)}
       ${rangeHTML('smooth', 'Cursor smoothing', 0, 1, 0.05, cfg.cursorSmoothing, PTR_FMT.smooth)}
-      ${rangeHTML('clickMax', 'Max click duration', 100, 600, 10, cfg.clickMaxMs, PTR_FMT.clickMax)}
     </div>
     <div class="box-preview">
       <div class="box-frame"><div class="box-rect" id="boxRect"></div></div>
       <div class="box-caption">Area of the camera view that maps to your whole screen. Smaller = less arm movement.</div>
     </div>`;
   updateBoxPreview();
+  const hint = document.getElementById('ptrHint'); if (hint) hint.textContent = pointerHint();
+  updatePinchMeter();
 }
 function updateBoxPreview() {
   const r = $('#boxRect'); if (!r) return;
@@ -476,6 +518,22 @@ function onPointerInput(e) {
   else if (f === 'boxH') cfg.comfortBox.h = v;
   else if (f === 'smooth') cfg.cursorSmoothing = v;
   else if (f === 'clickMax') cfg.clickMaxMs = v;
+  else if (f === 'pinchOn' || f === 'pinchOff') {
+    cfg[f] = v;
+    // Keep release above start (the gap stops a borderline pinch flickering on and off).
+    const other = f === 'pinchOn' ? 'pinchOff' : 'pinchOn';
+    if (cfg.pinchOff < cfg.pinchOn + 0.03) {
+      cfg[other] = f === 'pinchOn' ? Math.min(0.8, +(v + 0.03).toFixed(2)) : Math.max(0.1, +(v - 0.03).toFixed(2));
+      const o = document.getElementById('f-' + other);
+      if (o) { o.value = cfg[other]; setRangeFill(o); $('#o-' + other).textContent = PTR_FMT[other](cfg[other]); }
+    }
+    const pc = (x) => Math.min(100, (x / PINCH_SCALE) * 100);
+    document.querySelectorAll('#pinchMeter .meter-track').forEach((tr) => {
+      tr.querySelector('[data-thr=on]').style.left = pc(cfg.pinchOn) + '%';
+      tr.querySelector('[data-thr=off]').style.left = pc(cfg.pinchOff) + '%';
+      const band = tr.querySelector('.meter-band'); band.style.left = pc(cfg.pinchOn) + '%'; band.style.width = (pc(cfg.pinchOff) - pc(cfg.pinchOn)) + '%';
+    });
+  }
   else return;
   setRangeFill(inp);
   $('#o-' + f).textContent = PTR_FMT[f](v);
@@ -860,6 +918,7 @@ window.addEventListener('resize', () => drawSkeletons(lastHands));
 
 function renderTelemetry(t) {
   telem = t;
+  if (openPanelName === 'pointer') updatePinchMeter();
   // status chips
   const chip = $('#statusChip');
   const s = String(t.status || 'Unknown');
